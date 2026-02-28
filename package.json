@@ -1,0 +1,110 @@
+{
+  "name": "promptguard-sdk",
+  "version": "1.5.0",
+  "description": "Drop-in security for AI applications - AI Firewall SDK with auto-instrumentation",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./auto": {
+      "require": "./dist/auto.js",
+      "types": "./dist/auto.d.ts"
+    },
+    "./guard": {
+      "require": "./dist/guard.js",
+      "types": "./dist/guard.d.ts"
+    },
+    "./integrations/langchain": {
+      "require": "./dist/integrations/langchain.js",
+      "types": "./dist/integrations/langchain.d.ts"
+    },
+    "./integrations/vercel-ai": {
+      "require": "./dist/integrations/vercel-ai.js",
+      "types": "./dist/integrations/vercel-ai.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "security",
+    "llm",
+    "prompt-injection",
+    "openai",
+    "anthropic",
+    "google-generativeai",
+    "ai-firewall",
+    "pii-detection",
+    "llm-security",
+    "ai-security",
+    "langchain",
+    "vercel-ai",
+    "auto-instrumentation",
+    "genai-security",
+    "cohere",
+    "aws-bedrock"
+  ],
+  "author": "PromptGuard <support@promptguard.co>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/acebot712/promptguard-node.git"
+  },
+  "homepage": "https://promptguard.co",
+  "bugs": {
+    "url": "https://github.com/acebot712/promptguard-node/issues"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.6",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.20.0",
+    "@aws-sdk/client-bedrock-runtime": ">=3.0.0",
+    "@google/generative-ai": ">=0.5.0",
+    "@langchain/core": ">=0.1.0",
+    "ai": ">=3.0.0",
+    "cohere-ai": ">=7.0.0",
+    "openai": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "openai": {
+      "optional": true
+    },
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "@aws-sdk/client-bedrock-runtime": {
+      "optional": true
+    },
+    "@google/generative-ai": {
+      "optional": true
+    },
+    "@langchain/core": {
+      "optional": true
+    },
+    "ai": {
+      "optional": true
+    },
+    "cohere-ai": {
+      "optional": true
+    }
+  }
+}
