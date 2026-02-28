@@ -27,22 +27,21 @@
  * ```
  */
 
+// Auto-instrumentation
+export { type InitOptions, init, shutdown } from "./auto"
 // Guard client (standalone scanning)
 export {
-  GuardClient,
-  GuardDecision,
   GuardApiError,
-  PromptGuardBlockedError,
+  GuardClient,
   type GuardClientConfig,
   type GuardContext,
+  GuardDecision,
   type GuardMessage,
   type GuardRequestBody,
   type GuardResponseBody,
+  PromptGuardBlockedError,
   type ThreatDetail,
 } from "./guard"
-
-// Auto-instrumentation
-export { init, shutdown, type InitOptions } from "./auto"
 
 // Framework integrations (re-exported for convenience)
 export { PromptGuardCallbackHandler } from "./integrations/langchain"

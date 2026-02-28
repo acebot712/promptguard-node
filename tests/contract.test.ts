@@ -9,7 +9,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 
-import { GuardClient, GuardDecision, PromptGuardBlockedError } from "../src/guard"
+import { GuardDecision, PromptGuardBlockedError } from "../src/guard"
 import { messagesToGuardFormat as anthropicMessages } from "../src/patches/anthropic"
 import { contentToGuardFormat } from "../src/patches/google"
 import { messagesToGuardFormat } from "../src/patches/openai"

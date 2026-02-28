@@ -113,7 +113,10 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
       ? async ({
           doGenerate,
           params,
-        }: { doGenerate: () => Promise<unknown>; params: Record<string, unknown> }) => {
+        }: {
+          doGenerate: () => Promise<unknown>
+          params: Record<string, unknown>
+        }) => {
           const result = await doGenerate()
           const typed = result as Record<string, unknown>
 
