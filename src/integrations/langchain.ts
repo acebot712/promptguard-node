@@ -210,21 +210,6 @@ export class PromptGuardCallbackHandler {
     this.chainContext.delete(runId)
   }
 
-  // -- Retriever (no-op) ---------------------------------------------------
-
-  handleRetrieverStart(..._args: unknown[]): void {
-    /* no-op */
-  }
-  handleRetrieverEnd(..._args: unknown[]): void {
-    /* no-op */
-  }
-  handleRetrieverError(..._args: unknown[]): void {
-    /* no-op */
-  }
-  handleText(..._args: unknown[]): void {
-    /* no-op */
-  }
-
   // -- Internal helpers ----------------------------------------------------
 
   private async safeScan(

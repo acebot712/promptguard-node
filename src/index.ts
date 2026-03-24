@@ -47,7 +47,7 @@ export {
 export { PromptGuardCallbackHandler } from "./integrations/langchain"
 export { promptGuardMiddleware } from "./integrations/vercel-ai"
 
-export interface PromptGuardConfig {
+interface PromptGuardConfig {
   apiKey: string
   baseUrl?: string
   timeout?: number
@@ -55,12 +55,12 @@ export interface PromptGuardConfig {
   retryDelay?: number
 }
 
-export interface Message {
+interface Message {
   role: "system" | "user" | "assistant"
   content: string
 }
 
-export interface ChatCompletionRequest {
+interface ChatCompletionRequest {
   model: string
   messages: Message[]
   temperature?: number
@@ -69,7 +69,7 @@ export interface ChatCompletionRequest {
   [key: string]: unknown
 }
 
-export interface ChatCompletionResponse {
+interface ChatCompletionResponse {
   id: string
   object: string
   created: number
@@ -86,7 +86,7 @@ export interface ChatCompletionResponse {
   }
 }
 
-export interface SecurityScanResult {
+interface SecurityScanResult {
   blocked: boolean
   decision: "allow" | "block" | "redact"
   reason?: string
@@ -94,13 +94,13 @@ export interface SecurityScanResult {
   confidence?: number
 }
 
-export interface RedactResult {
+interface RedactResult {
   original: string
   redacted: string
   piiFound: string[]
 }
 
-export interface CompletionRequest {
+interface CompletionRequest {
   model: string
   prompt: string
   temperature?: number
@@ -108,7 +108,7 @@ export interface CompletionRequest {
   [key: string]: unknown
 }
 
-export interface CompletionResponse {
+interface CompletionResponse {
   id: string
   object: string
   created: number
@@ -125,13 +125,13 @@ export interface CompletionResponse {
   }
 }
 
-export interface EmbeddingRequest {
+interface EmbeddingRequest {
   model: string
   input: string | string[]
   [key: string]: unknown
 }
 
-export interface EmbeddingResponse {
+interface EmbeddingResponse {
   object: string
   data: Array<{
     object: string
@@ -213,7 +213,7 @@ class Security {
   }
 }
 
-export interface ScrapeResult {
+interface ScrapeResult {
   url: string
   status: "safe" | "blocked"
   content: string
@@ -252,7 +252,7 @@ class Scrape {
   }
 }
 
-export interface ToolValidationResult {
+interface ToolValidationResult {
   allowed: boolean
   risk_score: number
   risk_level: string
@@ -287,7 +287,7 @@ class Agent {
   }
 }
 
-export interface RedTeamTestResult {
+interface RedTeamTestResult {
   test_name: string
   prompt: string
   decision: string
@@ -298,7 +298,7 @@ export interface RedTeamTestResult {
   details: Record<string, unknown>
 }
 
-export interface RedTeamSummary {
+interface RedTeamSummary {
   total_tests: number
   blocked: number
   allowed: number
@@ -306,13 +306,13 @@ export interface RedTeamSummary {
   results: RedTeamTestResult[]
 }
 
-export interface AutonomousRedTeamRequest {
+interface AutonomousRedTeamRequest {
   budget?: number
   target_preset?: string
   enabled_detectors?: string[]
 }
 
-export interface AutonomousRedTeamReport {
+interface AutonomousRedTeamReport {
   grade: string
   bypass_rate: number
   total_attempts: number
@@ -321,7 +321,7 @@ export interface AutonomousRedTeamReport {
   recommendations: string[]
 }
 
-export interface IntelligenceStats {
+interface IntelligenceStats {
   total_patterns: number
   by_category: Record<string, number>
   by_severity: Record<string, number>
