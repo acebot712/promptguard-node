@@ -3,7 +3,7 @@
  *
  * Drop-in security for AI applications.
  *
- * **Option 1 — Auto-instrumentation (recommended)**
+ * **Option 1 - Auto-instrumentation (recommended)**
  * @example
  * ```ts
  * import { init } from 'promptguard-sdk';
@@ -11,7 +11,7 @@
  * // All LLM calls are now secured automatically.
  * ```
  *
- * **Option 2 — Proxy mode**
+ * **Option 2 - Proxy mode**
  * @example
  * ```ts
  * import { PromptGuard } from 'promptguard-sdk';
@@ -19,7 +19,7 @@
  * const response = await pg.chat.completions.create({ ... });
  * ```
  *
- * **Option 3 — Framework integrations**
+ * **Option 3 - Framework integrations**
  * @example
  * ```ts
  * import { PromptGuardCallbackHandler } from 'promptguard-sdk/integrations/langchain';

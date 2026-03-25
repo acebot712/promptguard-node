@@ -1,5 +1,5 @@
 /**
- * Vercel AI SDK integration — middleware for `ai` package.
+ * Vercel AI SDK integration - middleware for `ai` package.
  *
  * Works with the Vercel AI SDK's `wrapLanguageModel` API to intercept
  * all model calls with PromptGuard security scanning.
@@ -65,7 +65,7 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
 
   return {
     /**
-     * transformParams — scans the input messages before they reach the model.
+     * transformParams - scans the input messages before they reach the model.
      */
     transformParams: async ({ params }: { params: Record<string, unknown> }) => {
       const prompt = params?.prompt
@@ -107,7 +107,7 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
     },
 
     /**
-     * wrapGenerate — optionally scans the model's response.
+     * wrapGenerate - optionally scans the model's response.
      */
     wrapGenerate: scanResponses
       ? async ({

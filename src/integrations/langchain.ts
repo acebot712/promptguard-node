@@ -1,5 +1,5 @@
 /**
- * LangChain.js integration — PromptGuardCallbackHandler.
+ * LangChain.js integration - PromptGuardCallbackHandler.
  *
  * Implements the LangChain BaseCallbackHandler interface to scan prompts
  * before LLM calls and responses after, with rich context about chains,

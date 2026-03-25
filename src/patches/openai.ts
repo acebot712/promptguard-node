@@ -1,5 +1,5 @@
 /**
- * OpenAI SDK patch — wraps the `create` method on the Chat Completions
+ * OpenAI SDK patch - wraps the `create` method on the Chat Completions
  * prototype (sync and async).
  *
  * This single patch covers every framework built on the `openai` npm

@@ -1,5 +1,5 @@
 /**
- * AWS Bedrock Runtime patch — wraps the `send` method on
+ * AWS Bedrock Runtime patch - wraps the `send` method on
  * `BedrockRuntimeClient` from `@aws-sdk/client-bedrock-runtime`.
  *
  * Unlike the other patches which target LLM-specific SDKs, this wraps

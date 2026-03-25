@@ -1,5 +1,5 @@
 /**
- * Google Generative AI SDK patch — wraps
+ * Google Generative AI SDK patch - wraps
  * `GenerativeModel.prototype.generateContent` from `@google/generative-ai`.
  *
  * Covers direct Google AI usage and frameworks built on top (LangChain.js

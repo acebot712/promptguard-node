@@ -1,6 +1,6 @@
 # PromptGuard Node.js SDK
 
-Drop-in security for AI applications. Secure any GenAI app — regardless of framework or LLM provider.
+Drop-in security for AI applications. Secure any GenAI app - regardless of framework or LLM provider.
 
 ## Installation
 
@@ -10,12 +10,12 @@ npm install promptguard-sdk
 
 ## Option 1: Auto-Instrumentation (Recommended)
 
-One line secures **every** LLM call in your application — no matter which framework you use.
+One line secures **every** LLM call in your application - no matter which framework you use.
 
 ```typescript
 import { init } from 'promptguard-sdk';
 
-// Call once at startup — before any LLM SDK usage.
+// Call once at startup - before any LLM SDK usage.
 init({ apiKey: 'pg_xxx' });
 
 // Everything below is now secured transparently.
@@ -46,10 +46,10 @@ Any framework built on these SDKs is automatically covered: **LangChain.js**, **
 ### Modes
 
 ```typescript
-// Enforce mode (default) — blocks policy violations.
+// Enforce mode (default) - blocks policy violations.
 init({ apiKey: 'pg_xxx', mode: 'enforce' });
 
-// Monitor mode — logs threats but never blocks. Good for shadow deployment.
+// Monitor mode - logs threats but never blocks. Good for shadow deployment.
 init({ apiKey: 'pg_xxx', mode: 'monitor' });
 ```
 
@@ -136,7 +136,7 @@ const result = await chain.invoke(
 );
 ```
 
-The callback handler provides rich context to PromptGuard — chain names, tool calls, agent steps — for more precise threat detection.
+The callback handler provides rich context to PromptGuard - chain names, tool calls, agent steps - for more precise threat detection.
 
 ### Vercel AI SDK
 
@@ -202,7 +202,7 @@ const pg = new PromptGuard({
 });
 ```
 
-Retries use exponential backoff starting from `retryDelay`. Only transient errors (network timeouts, 5xx responses) are retried — client errors (4xx) fail immediately.
+Retries use exponential backoff starting from `retryDelay`. Only transient errors (network timeouts, 5xx responses) are retried; client errors (4xx) fail immediately.
 
 ## Embeddings
 
@@ -263,12 +263,12 @@ console.log(`Total patterns: ${stats.total_patterns}`);
 
 | Option | Environment Variable | Default | Description |
 |--------|---------------------|---------|-------------|
-| `apiKey` | `PROMPTGUARD_API_KEY` | — | PromptGuard API key (required) |
+| `apiKey` | `PROMPTGUARD_API_KEY` | - | PromptGuard API key (required) |
 | `baseUrl` | `PROMPTGUARD_BASE_URL` | `https://api.promptguard.co/api/v1` | API base URL |
-| `mode` | — | `"enforce"` | `"enforce"` or `"monitor"` |
-| `failOpen` | — | `true` | Allow calls when Guard API is unreachable |
-| `scanResponses` | — | `false` | Also scan LLM responses |
-| `timeout` | — | `10000` | HTTP timeout in milliseconds |
+| `mode` | - | `"enforce"` | `"enforce"` or `"monitor"` |
+| `failOpen` | - | `true` | Allow calls when Guard API is unreachable |
+| `scanResponses` | - | `false` | Also scan LLM responses |
+| `timeout` | - | `10000` | HTTP timeout in milliseconds |
 
 ## Error Handling
 

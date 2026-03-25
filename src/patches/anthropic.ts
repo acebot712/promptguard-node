@@ -1,5 +1,5 @@
 /**
- * Anthropic SDK patch — wraps `Messages.prototype.create` from
+ * Anthropic SDK patch - wraps `Messages.prototype.create` from
  * `@anthropic-ai/sdk`.
  *
  * Covers direct Anthropic usage and frameworks that use it (LangChain.js

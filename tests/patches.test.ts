@@ -6,7 +6,7 @@ import { contentToGuardFormat, extractResponseText } from "../src/patches/google
 import { extractResponseContent, messagesToGuardFormat } from "../src/patches/openai"
 
 // ---------------------------------------------------------------------------
-// OpenAI patch — message conversion
+// OpenAI patch - message conversion
 // ---------------------------------------------------------------------------
 
 describe("OpenAI messagesToGuardFormat", () => {
@@ -61,7 +61,7 @@ describe("OpenAI extractResponseContent", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Anthropic patch — message conversion
+// Anthropic patch - message conversion
 // ---------------------------------------------------------------------------
 
 describe("Anthropic messagesToGuardFormat", () => {
@@ -119,7 +119,7 @@ describe("Anthropic extractResponseContent", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Google patch — content conversion
+// Google patch - content conversion
 // ---------------------------------------------------------------------------
 
 describe("Google contentToGuardFormat", () => {

@@ -21,7 +21,7 @@ describe("PromptGuardCallbackHandler", () => {
     expect(handler.name).toBe("promptguard")
   })
 
-  test("handleLLMStart scans prompts — allow", async () => {
+  test("handleLLMStart scans prompts - allow", async () => {
     // Mock the guard client's scan to return allow
     const handler = new PromptGuardCallbackHandler({ apiKey: "pg_test" })
     const guard = (handler as unknown as { guard: { scan: jest.Mock } }).guard

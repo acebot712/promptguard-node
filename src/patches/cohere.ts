@@ -1,5 +1,5 @@
 /**
- * Cohere SDK patch — wraps `Client.prototype.chat` and
+ * Cohere SDK patch - wraps `Client.prototype.chat` and
  * `ClientV2.prototype.chat` from the `cohere-ai` npm package.
  *
  * Covers direct Cohere usage and frameworks that use it (LangChain.js

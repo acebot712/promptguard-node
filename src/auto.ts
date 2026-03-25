@@ -2,7 +2,7 @@
  * Auto-instrumentation for PromptGuard (Node.js).
  *
  * Call {@link init} once at application startup to automatically
- * secure **all** LLM calls made through popular SDKs — regardless of
+ * secure **all** LLM calls made through popular SDKs - regardless of
  * which framework (LangChain.js, Vercel AI SDK, etc.) sits on top.
  *
  * @example
@@ -147,7 +147,7 @@ function applyPatches(): void {
         appliedPatches.push({ name: mod.name, revert: patchModule.revert })
       }
     } catch {
-      // SDK not installed or incompatible — skip silently
+      // SDK not installed or incompatible - skip silently
     }
   }
 }

@@ -1,5 +1,5 @@
 /**
- * Guard client — calls the PromptGuard Guard API for content scanning.
+ * Guard client - calls the PromptGuard Guard API for content scanning.
  *
  * Used internally by auto-instrumentation patches and framework
  * integrations.  Sends messages to POST /api/v1/guard and returns
@@ -48,7 +48,7 @@ export interface GuardResponseBody {
 }
 
 // ---------------------------------------------------------------------------
-// GuardDecision — immutable result object
+// GuardDecision - immutable result object
 // ---------------------------------------------------------------------------
 
 export class GuardDecision {

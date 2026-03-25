@@ -1,5 +1,5 @@
 /**
- * Shared contract tests — validates the Node SDK against guard-contract.json.
+ * Shared contract tests - validates the Node SDK against guard-contract.json.
  *
  * If this test fails, the Node SDK has drifted from the cross-SDK
  * contract.  Fix the SDK, not the contract (unless both SDKs agree
