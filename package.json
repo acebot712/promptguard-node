@@ -82,7 +82,7 @@
     "jest": "^29.7.0",
     "ts-jest": "^29.4.6",
     "ts-node": "^10.9.2",
-    "typescript": "^5.0.0"
+    "typescript": "^6.0.2"
   },
   "peerDependencies": {
     "@anthropic-ai/sdk": ">=0.20.0",
