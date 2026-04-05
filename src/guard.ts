@@ -136,7 +136,7 @@ export class GuardClient {
       Authorization: `Bearer ${this.apiKey}`,
       "Content-Type": "application/json",
       "X-PromptGuard-SDK": "node-auto",
-      "X-PromptGuard-Version": "1.3.0",
+      "X-PromptGuard-Version": "1.5.2",
     }
   }
 

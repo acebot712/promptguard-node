@@ -437,7 +437,7 @@ export class PromptGuard {
             Authorization: `Bearer ${this.config.apiKey}`,
             "Content-Type": "application/json",
             "X-PromptGuard-SDK": "node",
-            "X-PromptGuard-Version": "1.3.0",
+            "X-PromptGuard-Version": "1.5.2",
           },
           body: body ? JSON.stringify(body) : undefined,
           signal: AbortSignal.timeout(this.config.timeout),
