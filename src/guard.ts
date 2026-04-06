@@ -6,6 +6,9 @@
  * the decision (allow / block / redact).
  */
 
+import { DEFAULT_BASE_URL } from "./resolve"
+import { SDK_VERSION } from "./version"
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -126,7 +129,7 @@ export class GuardClient {
 
   constructor(config: GuardClientConfig) {
     this.apiKey = config.apiKey
-    const base = (config.baseUrl ?? "https://api.promptguard.co/api/v1").replace(/\/$/, "")
+    const base = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "")
     this.guardUrl = `${base}/guard`
     this.timeout = config.timeout ?? 10_000
   }
@@ -136,7 +139,7 @@ export class GuardClient {
       Authorization: `Bearer ${this.apiKey}`,
       "Content-Type": "application/json",
       "X-PromptGuard-SDK": "node-auto",
-      "X-PromptGuard-Version": "1.5.3",
+      "X-PromptGuard-Version": SDK_VERSION,
     }
   }
 

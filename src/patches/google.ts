@@ -6,7 +6,8 @@
  * ChatGoogleGenerativeAI, etc.).
  */
 
-import { GuardApiError, type GuardMessage, PromptGuardBlockedError } from "../guard"
+import type { GuardMessage } from "../guard"
+import { createPatchedMethod } from "./base"
 
 let originalGenerate: ((...args: unknown[]) => unknown) | null = null
 let patched = false
@@ -78,7 +79,6 @@ export function apply(): boolean {
 
   let GenerativeModel: { prototype: { generateContent: unknown } }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const mod = require("@google/generative-ai")
     GenerativeModel = mod.GenerativeModel
     if (!GenerativeModel?.prototype?.generateContent) return false
@@ -86,66 +86,22 @@ export function apply(): boolean {
     return false
   }
 
-  originalGenerate = GenerativeModel.prototype.generateContent as typeof originalGenerate
+  const original = GenerativeModel.prototype.generateContent as (...args: unknown[]) => unknown
+  originalGenerate = original
 
-  GenerativeModel.prototype.generateContent = async function patchedGenerate(
-    this: Record<string, unknown>,
-    ...args: unknown[]
-  ) {
-    const { getGuardClient, getMode, isFailOpen, shouldScanResponses } = require("../auto")
-
-    const guard = getGuardClient()
-    if (!guard) return originalGenerate?.apply(this, args)
-
-    const contents = args[0]
-    const modelName = String(this.model ?? this.modelName ?? "gemini")
-
-    // -- Pre-call scan ---------------------------------------------------
-    if (contents) {
-      const guardMessages = contentToGuardFormat(contents)
-      let decision = null
-
-      try {
-        decision = await guard.scan(guardMessages, "input", modelName, {
-          framework: "google-generativeai",
-        })
-      } catch (err: unknown) {
-        if (err instanceof GuardApiError && !isFailOpen()) throw err
+  GenerativeModel.prototype.generateContent = createPatchedMethod(original, {
+    framework: "google-generativeai",
+    extractMessages: (args, thisArg) => {
+      const contents = args[0]
+      const self = thisArg as Record<string, unknown>
+      const modelName = String(self.model ?? self.modelName ?? "gemini")
+      return {
+        messages: contents ? contentToGuardFormat(contents) : [],
+        model: modelName,
       }
-
-      if (decision?.blocked) {
-        if (getMode() === "enforce") throw new PromptGuardBlockedError(decision)
-        console.warn(
-          `[promptguard][monitor] would block: ${decision.threatType} (event=${decision.eventId})`,
-        )
-      }
-    }
-
-    // -- Original call ---------------------------------------------------
-    const response = await originalGenerate?.apply(this, args)
-
-    // -- Post-call scan --------------------------------------------------
-    if (shouldScanResponses() && response && guard) {
-      try {
-        const text = extractResponseText(response)
-        if (text) {
-          const respDecision = await guard.scan(
-            [{ role: "assistant", content: text }],
-            "output",
-            modelName,
-          )
-          if (respDecision.blocked && getMode() === "enforce") {
-            throw new PromptGuardBlockedError(respDecision)
-          }
-        }
-      } catch (err: unknown) {
-        if (err instanceof PromptGuardBlockedError) throw err
-        if (err instanceof GuardApiError && !isFailOpen()) throw err
-      }
-    }
-
-    return response
-  }
+    },
+    extractResponseText: (response) => extractResponseText(response),
+  })
 
   patched = true
   return true
@@ -155,7 +111,6 @@ export function revert(): void {
   if (!patched || !originalGenerate) return
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const mod = require("@google/generative-ai")
     if (mod.GenerativeModel) {
       mod.GenerativeModel.prototype.generateContent = originalGenerate

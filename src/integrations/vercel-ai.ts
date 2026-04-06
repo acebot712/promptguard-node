@@ -25,6 +25,7 @@ import {
   type GuardMessage,
   PromptGuardBlockedError,
 } from "../guard"
+import { resolveCredentials } from "../resolve"
 
 // ---------------------------------------------------------------------------
 // Options
@@ -48,17 +49,9 @@ export interface PromptGuardMiddlewareOptions extends GuardClientConfig {
  * interface (`transformParams` + `wrapGenerate`).
  */
 export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
-  const apiKey = options.apiKey ?? process.env.PROMPTGUARD_API_KEY ?? ""
-  if (!apiKey) {
-    throw new Error("PromptGuard API key required. Pass apiKey or set PROMPTGUARD_API_KEY.")
-  }
+  const { apiKey, baseUrl } = resolveCredentials(options.apiKey, options.baseUrl)
 
-  const guard = new GuardClient({
-    apiKey,
-    baseUrl: options.baseUrl,
-    timeout: options.timeout,
-  })
-
+  const guard = new GuardClient({ apiKey, baseUrl, timeout: options.timeout })
   const mode = options.mode ?? "enforce"
   const scanResponses = options.scanResponses ?? false
   const failOpen = options.failOpen ?? true
@@ -100,7 +93,6 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
       } catch (err) {
         if (err instanceof PromptGuardBlockedError) throw err
         if (!failOpen) throw err
-        // fail-open: continue with original params
       }
 
       return params
@@ -155,13 +147,6 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Convert the Vercel AI SDK prompt structure to GuardMessages.
- *
- * The Vercel AI SDK prompt can be:
- * - A string (simple prompt)
- * - An array of message objects with `role` and `content`
- */
 function vercelPromptToGuardMessages(prompt: unknown): GuardMessage[] {
   if (typeof prompt === "string") {
     return [{ role: "user", content: prompt }]
@@ -191,9 +176,6 @@ function vercelPromptToGuardMessages(prompt: unknown): GuardMessage[] {
   return result
 }
 
-/**
- * Apply redacted content back into the Vercel AI SDK prompt structure.
- */
 function applyRedactionToPrompt(prompt: unknown, redacted: GuardMessage[]): unknown {
   if (typeof prompt === "string" && redacted[0]) {
     return redacted[0].content

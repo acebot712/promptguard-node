@@ -6,7 +6,8 @@
  * ChatAnthropic, etc.).
  */
 
-import { GuardApiError, type GuardMessage, PromptGuardBlockedError } from "../guard"
+import type { GuardMessage } from "../guard"
+import { createPatchedMethod } from "./base"
 
 let originalCreate: ((...args: unknown[]) => unknown) | null = null
 let patched = false
@@ -18,7 +19,6 @@ let patched = false
 export function messagesToGuardFormat(messages: unknown[], system?: unknown): GuardMessage[] {
   const result: GuardMessage[] = []
 
-  // Anthropic separates the system prompt from the messages array.
   if (system) {
     if (typeof system === "string") {
       result.push({ role: "system", content: system })
@@ -85,7 +85,6 @@ export function apply(): boolean {
 
   let Messages: { prototype: { create: unknown } }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const mod = require("@anthropic-ai/sdk/resources/messages")
     Messages = mod.Messages
     if (!Messages?.prototype?.create) return false
@@ -93,87 +92,40 @@ export function apply(): boolean {
     return false
   }
 
-  originalCreate = Messages.prototype.create as typeof originalCreate
+  const original = Messages.prototype.create as (...args: unknown[]) => unknown
+  originalCreate = original
 
-  Messages.prototype.create = async function patchedCreate(this: unknown, ...args: unknown[]) {
-    const { getGuardClient, getMode, isFailOpen, shouldScanResponses } = require("../auto")
-
-    const guard = getGuardClient()
-    if (!guard) return originalCreate?.apply(this, args)
-
-    const params = (args[0] ?? {}) as Record<string, unknown>
-    const messages = params.messages as unknown[] | undefined
-    const system = params.system
-    const model = params.model
-
-    // -- Pre-call scan ---------------------------------------------------
-    if (messages) {
-      const guardMessages = messagesToGuardFormat(messages, system)
-      let decision = null
-
-      try {
-        decision = await guard.scan(guardMessages, "input", model ? String(model) : undefined, {
-          framework: "anthropic",
-        })
-      } catch (err: unknown) {
-        if (err instanceof GuardApiError && !isFailOpen()) throw err
+  Messages.prototype.create = createPatchedMethod(original, {
+    framework: "anthropic",
+    extractMessages: (args) => {
+      const params = (args[0] ?? {}) as Record<string, unknown>
+      const messages = params.messages as unknown[] | undefined
+      return {
+        messages: messages ? messagesToGuardFormat(messages, params.system) : [],
+        model: params.model ? String(params.model) : undefined,
       }
+    },
+    extractResponseText: (response) => extractResponseContent(response),
+    applyRedaction: (args, redactedMessages) => {
+      const params = (args[0] ?? {}) as Record<string, unknown>
+      const messages = params.messages as unknown[]
+      const hasSystem = params.system != null
+      const offset = hasSystem ? 1 : 0
 
-      if (decision?.blocked) {
-        if (getMode() === "enforce") throw new PromptGuardBlockedError(decision)
-        console.warn(
-          `[promptguard][monitor] would block: ${decision.threatType} (event=${decision.eventId})`,
-        )
+      const newParams = { ...params }
+      if (hasSystem && redactedMessages[0]) {
+        newParams.system = redactedMessages[0].content
       }
-
-      if (decision?.redacted && decision.redactedMessages) {
-        if (getMode() === "enforce") {
-          const redacted = decision.redactedMessages
-          const hasSystem = system != null
-          const offset = hasSystem ? 1 : 0
-
-          const newParams = { ...params }
-          if (hasSystem && redacted[0]) {
-            newParams.system = redacted[0].content
-          }
-          newParams.messages = messages.map((msg: unknown, i: number) => {
-            const idx = i + offset
-            if (idx < redacted.length) {
-              const typedMsg = msg as Record<string, unknown>
-              return { ...typedMsg, content: redacted[idx].content }
-            }
-            return msg
-          })
-          args[0] = newParams
+      newParams.messages = messages.map((msg: unknown, i: number) => {
+        const idx = i + offset
+        if (idx < redactedMessages.length) {
+          return { ...(msg as Record<string, unknown>), content: redactedMessages[idx].content }
         }
-      }
-    }
-
-    // -- Original call ---------------------------------------------------
-    const response = await originalCreate?.apply(this, args)
-
-    // -- Post-call scan --------------------------------------------------
-    if (shouldScanResponses() && response && guard) {
-      try {
-        const text = extractResponseContent(response)
-        if (text) {
-          const respDecision = await guard.scan(
-            [{ role: "assistant", content: text }],
-            "output",
-            model ? String(model) : undefined,
-          )
-          if (respDecision.blocked && getMode() === "enforce") {
-            throw new PromptGuardBlockedError(respDecision)
-          }
-        }
-      } catch (err: unknown) {
-        if (err instanceof PromptGuardBlockedError) throw err
-        if (err instanceof GuardApiError && !isFailOpen()) throw err
-      }
-    }
-
-    return response
-  }
+        return msg
+      })
+      return [newParams, ...args.slice(1)]
+    },
+  })
 
   patched = true
   return true
@@ -183,7 +135,6 @@ export function revert(): void {
   if (!patched || !originalCreate) return
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const mod = require("@anthropic-ai/sdk/resources/messages")
     mod.Messages.prototype.create = originalCreate
   } catch {

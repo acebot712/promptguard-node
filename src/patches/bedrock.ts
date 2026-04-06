@@ -10,7 +10,8 @@
  * and any model accessible via the Bedrock Runtime API.
  */
 
-import { GuardApiError, type GuardMessage, PromptGuardBlockedError } from "../guard"
+import type { GuardMessage } from "../guard"
+import { createPatchedMethod } from "./base"
 
 let originalSend: ((...args: unknown[]) => unknown) | null = null
 let patched = false
@@ -50,7 +51,7 @@ function extractSystem(system: unknown, result: GuardMessage[]): void {
   }
 }
 
-function extractMessagesFromBody(raw: unknown, _modelId: string): GuardMessage[] {
+function extractMessagesFromBody(raw: unknown): GuardMessage[] {
   let body = raw
   if (body instanceof Uint8Array || Buffer.isBuffer(body)) {
     try {
@@ -71,7 +72,6 @@ function extractMessagesFromBody(raw: unknown, _modelId: string): GuardMessage[]
   const obj = body as Record<string, unknown>
   const result: GuardMessage[] = []
 
-  // Anthropic on Bedrock (InvokeModel)
   if (obj.messages && Array.isArray(obj.messages)) {
     extractSystem(obj.system, result)
     for (const msg of obj.messages) {
@@ -85,7 +85,6 @@ function extractMessagesFromBody(raw: unknown, _modelId: string): GuardMessage[]
     return result
   }
 
-  // Converse API (capitalized keys)
   if (obj.Messages && Array.isArray(obj.Messages)) {
     extractSystem(obj.System ?? obj.system, result)
     for (const msg of obj.Messages) {
@@ -99,10 +98,7 @@ function extractMessagesFromBody(raw: unknown, _modelId: string): GuardMessage[]
     return result
   }
 
-  // Amazon Titan
   if (obj.inputText) return [{ role: "user", content: String(obj.inputText) }]
-
-  // Llama / Mistral
   if (obj.prompt) return [{ role: "user", content: String(obj.prompt) }]
 
   return []
@@ -159,7 +155,6 @@ export function apply(): boolean {
 
   let BedrockRuntimeClient: { prototype: { send: unknown } }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const mod = require("@aws-sdk/client-bedrock-runtime")
     BedrockRuntimeClient = mod.BedrockRuntimeClient
     if (!BedrockRuntimeClient?.prototype?.send) return false
@@ -167,79 +162,33 @@ export function apply(): boolean {
     return false
   }
 
-  originalSend = BedrockRuntimeClient.prototype.send as typeof originalSend
+  const original = BedrockRuntimeClient.prototype.send as (...args: unknown[]) => unknown
+  originalSend = original
 
-  BedrockRuntimeClient.prototype.send = async function patchedSend(
-    this: unknown,
-    ...args: unknown[]
-  ) {
-    const { getGuardClient, getMode, isFailOpen, shouldScanResponses } = require("../auto")
-
-    const command = args[0] as Record<string, unknown>
-    const commandName = (command?.constructor as { name?: string })?.name ?? ""
-
-    if (!BEDROCK_COMMANDS.has(commandName)) {
-      return originalSend?.apply(this, args)
-    }
-
-    const guard = getGuardClient()
-    if (!guard) return originalSend?.apply(this, args)
-
-    const input = (command.input ?? {}) as Record<string, unknown>
-    const modelId = String(input.modelId ?? input.ModelId ?? "bedrock")
-
-    let guardMessages: GuardMessage[]
-    if (commandName === "InvokeModelCommand") {
-      guardMessages = extractMessagesFromBody(input.body, modelId)
-    } else {
-      guardMessages = extractMessagesFromBody(input, modelId)
-    }
-
-    // -- Pre-call scan ---------------------------------------------------
-    if (guardMessages.length) {
-      let decision = null
-
-      try {
-        decision = await guard.scan(guardMessages, "input", modelId, {
-          framework: "aws-bedrock",
-        })
-      } catch (err: unknown) {
-        if (err instanceof GuardApiError && !isFailOpen()) throw err
-      }
-
-      if (decision?.blocked) {
-        if (getMode() === "enforce") throw new PromptGuardBlockedError(decision)
-        console.warn(
-          `[promptguard][monitor] would block: ${decision.threatType} (event=${decision.eventId})`,
-        )
-      }
-    }
-
-    // -- Original call ---------------------------------------------------
-    const response = await originalSend?.apply(this, args)
-
-    // -- Post-call scan --------------------------------------------------
-    if (shouldScanResponses() && response && guard) {
-      try {
-        const text = extractBedrockResponseText(response, commandName)
-        if (text) {
-          const respDecision = await guard.scan(
-            [{ role: "assistant", content: text }],
-            "output",
-            modelId,
-          )
-          if (respDecision.blocked && getMode() === "enforce") {
-            throw new PromptGuardBlockedError(respDecision)
-          }
-        }
-      } catch (err: unknown) {
-        if (err instanceof PromptGuardBlockedError) throw err
-        if (err instanceof GuardApiError && !isFailOpen()) throw err
-      }
-    }
-
-    return response
-  }
+  BedrockRuntimeClient.prototype.send = createPatchedMethod(original, {
+    framework: "aws-bedrock",
+    shouldIntercept: (args) => {
+      const command = args[0] as Record<string, unknown>
+      const commandName = (command?.constructor as { name?: string })?.name ?? ""
+      return BEDROCK_COMMANDS.has(commandName)
+    },
+    extractMessages: (args) => {
+      const command = args[0] as Record<string, unknown>
+      const commandName = (command?.constructor as { name?: string })?.name ?? ""
+      const input = (command.input ?? {}) as Record<string, unknown>
+      const modelId = String(input.modelId ?? input.ModelId ?? "bedrock")
+      const messages =
+        commandName === "InvokeModelCommand"
+          ? extractMessagesFromBody(input.body)
+          : extractMessagesFromBody(input)
+      return { messages, model: modelId }
+    },
+    extractResponseText: (response, args) => {
+      const command = args[0] as Record<string, unknown>
+      const commandName = (command?.constructor as { name?: string })?.name ?? ""
+      return extractBedrockResponseText(response, commandName) || null
+    },
+  })
 
   patched = true
   return true
@@ -249,7 +198,6 @@ export function revert(): void {
   if (!patched || !originalSend) return
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const mod = require("@aws-sdk/client-bedrock-runtime")
     if (mod.BedrockRuntimeClient?.prototype) {
       mod.BedrockRuntimeClient.prototype.send = originalSend

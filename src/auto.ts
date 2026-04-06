@@ -19,6 +19,7 @@
  */
 
 import { GuardClient } from "./guard"
+import { resolveCredentials } from "./resolve"
 
 // ---------------------------------------------------------------------------
 // Global state
@@ -28,7 +29,6 @@ let guardClient: GuardClient | null = null
 let mode: "enforce" | "monitor" = "enforce"
 let failOpen = true
 let scanResponses = false
-let initialized = false
 
 const appliedPatches: Array<{ name: string; revert: () => void }> = []
 
@@ -50,16 +50,7 @@ export interface InitOptions {
 }
 
 export function init(options: InitOptions = {}): void {
-  const resolvedKey = options.apiKey ?? process.env.PROMPTGUARD_API_KEY ?? ""
-  if (!resolvedKey) {
-    throw new Error(
-      "PromptGuard API key required. Pass apiKey or set the " +
-        "PROMPTGUARD_API_KEY environment variable.",
-    )
-  }
-
-  const resolvedUrl =
-    options.baseUrl ?? process.env.PROMPTGUARD_BASE_URL ?? "https://api.promptguard.co/api/v1"
+  const { apiKey, baseUrl } = resolveCredentials(options.apiKey, options.baseUrl)
 
   const resolvedMode = options.mode ?? "enforce"
   if (resolvedMode !== "enforce" && resolvedMode !== "monitor") {
@@ -67,19 +58,17 @@ export function init(options: InitOptions = {}): void {
   }
 
   guardClient = new GuardClient({
-    apiKey: resolvedKey,
-    baseUrl: resolvedUrl,
+    apiKey,
+    baseUrl,
     timeout: options.timeout ?? 10_000,
   })
 
   mode = resolvedMode
   failOpen = options.failOpen ?? true
   scanResponses = options.scanResponses ?? false
-  initialized = true
 
   applyPatches()
 
-  // eslint-disable-next-line no-console
   console.log(
     `[promptguard] auto-instrumentation initialised (mode=${mode}, fail_open=${failOpen})`,
   )
@@ -94,9 +83,7 @@ export function shutdown(): void {
     }
   }
   appliedPatches.length = 0
-
   guardClient = null
-  initialized = false
 }
 
 // ---------------------------------------------------------------------------
@@ -119,10 +106,6 @@ export function shouldScanResponses(): boolean {
   return scanResponses
 }
 
-export function isInitialized(): boolean {
-  return initialized
-}
-
 // ---------------------------------------------------------------------------
 // Patch orchestration
 // ---------------------------------------------------------------------------
@@ -138,7 +121,6 @@ function applyPatches(): void {
 
   for (const mod of patchModules) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const patchModule = require(mod.path) as {
         apply: () => boolean
         revert: () => void

@@ -7,7 +7,8 @@
  * AutoGen.js, CrewAI.js, and direct usage.
  */
 
-import { GuardApiError, type GuardMessage, PromptGuardBlockedError } from "../guard"
+import type { GuardMessage } from "../guard"
+import { createPatchedMethod } from "./base"
 
 let originalCreate: ((...args: unknown[]) => unknown) | null = null
 let patched = false
@@ -75,7 +76,6 @@ export function apply(): boolean {
 
   let Completions: { prototype: { create: unknown } }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const mod = require("openai/resources/chat/completions")
     Completions = mod.Completions
     if (!Completions?.prototype?.create) return false
@@ -83,75 +83,26 @@ export function apply(): boolean {
     return false
   }
 
-  originalCreate = Completions.prototype.create as typeof originalCreate
+  const original = Completions.prototype.create as (...args: unknown[]) => unknown
+  originalCreate = original
 
-  Completions.prototype.create = async function patchedCreate(this: unknown, ...args: unknown[]) {
-    const { getGuardClient, getMode, isFailOpen, shouldScanResponses } = require("../auto")
-
-    const guard = getGuardClient()
-    if (!guard) return originalCreate?.apply(this, args)
-
-    const params = (args[0] ?? {}) as Record<string, unknown>
-    const messages = params.messages as unknown[] | undefined
-    const model = params.model
-
-    // -- Pre-call scan ---------------------------------------------------
-    if (messages) {
-      const guardMessages = messagesToGuardFormat(messages)
-      let decision = null
-
-      try {
-        decision = await guard.scan(guardMessages, "input", model ? String(model) : undefined, {
-          framework: "openai",
-        })
-      } catch (err: unknown) {
-        if (err instanceof GuardApiError && !isFailOpen()) throw err
-        // fail-open: continue
+  Completions.prototype.create = createPatchedMethod(original, {
+    framework: "openai",
+    extractMessages: (args) => {
+      const params = (args[0] ?? {}) as Record<string, unknown>
+      const messages = params.messages as unknown[] | undefined
+      return {
+        messages: messages ? messagesToGuardFormat(messages) : [],
+        model: params.model ? String(params.model) : undefined,
       }
-
-      if (decision?.blocked) {
-        if (getMode() === "enforce") throw new PromptGuardBlockedError(decision)
-        console.warn(
-          `[promptguard][monitor] would block: ${decision.threatType} (event=${decision.eventId})`,
-        )
-      }
-
-      if (decision?.redacted && decision.redactedMessages) {
-        if (getMode() === "enforce") {
-          args[0] = {
-            ...params,
-            messages: applyRedaction(messages, decision.redactedMessages),
-          }
-        }
-      }
-    }
-
-    // -- Original call ---------------------------------------------------
-    const response = await originalCreate?.apply(this, args)
-
-    // -- Post-call scan --------------------------------------------------
-    if (shouldScanResponses() && response && guard) {
-      try {
-        const text = extractResponseContent(response)
-        if (text) {
-          const respDecision = await guard.scan(
-            [{ role: "assistant", content: text }],
-            "output",
-            model ? String(model) : undefined,
-          )
-          if (respDecision.blocked && getMode() === "enforce") {
-            throw new PromptGuardBlockedError(respDecision)
-          }
-        }
-      } catch (err: unknown) {
-        if (err instanceof PromptGuardBlockedError) throw err
-        if (err instanceof GuardApiError && !isFailOpen()) throw err
-        // fail-open
-      }
-    }
-
-    return response
-  }
+    },
+    extractResponseText: (response) => extractResponseContent(response),
+    applyRedaction: (args, redactedMessages) => {
+      const params = (args[0] ?? {}) as Record<string, unknown>
+      const messages = params.messages as unknown[]
+      return [{ ...params, messages: applyRedaction(messages, redactedMessages) }, ...args.slice(1)]
+    },
+  })
 
   patched = true
   return true
@@ -161,7 +112,6 @@ export function revert(): void {
   if (!patched || !originalCreate) return
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const mod = require("openai/resources/chat/completions")
     mod.Completions.prototype.create = originalCreate
   } catch {

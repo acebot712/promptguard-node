@@ -10,7 +10,8 @@
  *  - V2 (`ClientV2`): `chat({ messages })` returning `{ message.content }`
  */
 
-import { GuardApiError, type GuardMessage, PromptGuardBlockedError } from "../guard"
+import type { GuardMessage } from "../guard"
+import { createPatchedMethod, type PatchConfig } from "./base"
 
 const originals: Map<string, (...args: unknown[]) => unknown> = new Map()
 let patched = false
@@ -71,67 +72,19 @@ function extractResponseText(response: unknown): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Patch factory
+// Shared config
 // ---------------------------------------------------------------------------
 
-function createPatchedChat(
-  originalChat: (...args: unknown[]) => unknown,
-): (...args: unknown[]) => Promise<unknown> {
-  return async function patchedChat(this: unknown, ...args: unknown[]) {
-    const { getGuardClient, getMode, isFailOpen, shouldScanResponses } = require("../auto")
-
-    const guard = getGuardClient()
-    if (!guard) return originalChat.apply(this, args)
-
+const cohereConfig: PatchConfig = {
+  framework: "cohere",
+  extractMessages: (args) => {
     const params = (args[0] ?? {}) as Record<string, unknown>
-    const guardMessages = messagesToGuardFormat(params)
-    const model = params.model ? String(params.model) : "cohere"
-
-    // -- Pre-call scan ---------------------------------------------------
-    if (guardMessages.length) {
-      let decision = null
-
-      try {
-        decision = await guard.scan(guardMessages, "input", model, {
-          framework: "cohere",
-        })
-      } catch (err: unknown) {
-        if (err instanceof GuardApiError && !isFailOpen()) throw err
-      }
-
-      if (decision?.blocked) {
-        if (getMode() === "enforce") throw new PromptGuardBlockedError(decision)
-        console.warn(
-          `[promptguard][monitor] would block: ${decision.threatType} (event=${decision.eventId})`,
-        )
-      }
+    return {
+      messages: messagesToGuardFormat(params),
+      model: params.model ? String(params.model) : "cohere",
     }
-
-    // -- Original call ---------------------------------------------------
-    const response = await originalChat.apply(this, args)
-
-    // -- Post-call scan --------------------------------------------------
-    if (shouldScanResponses() && response && guard) {
-      try {
-        const text = extractResponseText(response)
-        if (text) {
-          const respDecision = await guard.scan(
-            [{ role: "assistant", content: text }],
-            "output",
-            model,
-          )
-          if (respDecision.blocked && getMode() === "enforce") {
-            throw new PromptGuardBlockedError(respDecision)
-          }
-        }
-      } catch (err: unknown) {
-        if (err instanceof PromptGuardBlockedError) throw err
-        if (err instanceof GuardApiError && !isFailOpen()) throw err
-      }
-    }
-
-    return response
-  }
+  },
+  extractResponseText: (response) => extractResponseText(response),
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +96,6 @@ export function apply(): boolean {
 
   let cohere: Record<string, { prototype: { chat?: unknown } }>
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     cohere = require("cohere-ai")
   } catch {
     return false
@@ -158,8 +110,9 @@ export function apply(): boolean {
       const key = `${className}.chat`
       if (originals.has(key)) continue
 
-      originals.set(key, cls.prototype.chat as (...args: unknown[]) => unknown)
-      cls.prototype.chat = createPatchedChat(cls.prototype.chat as (...args: unknown[]) => unknown)
+      const original = cls.prototype.chat as (...args: unknown[]) => unknown
+      originals.set(key, original)
+      cls.prototype.chat = createPatchedMethod(original, cohereConfig)
       patchedAny = true
     } catch {
       // class not available in this version
@@ -174,7 +127,6 @@ export function revert(): void {
   if (!patched) return
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const cohere = require("cohere-ai") as Record<string, { prototype: { chat?: unknown } }>
     for (const [key, original] of originals) {
       const className = key.split(".")[0]

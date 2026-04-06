@@ -25,6 +25,7 @@ import {
   type GuardMessage,
   PromptGuardBlockedError,
 } from "../guard"
+import { resolveCredentials } from "../resolve"
 
 // ---------------------------------------------------------------------------
 // Options
@@ -52,17 +53,9 @@ export class PromptGuardCallbackHandler {
   private chainContext = new Map<string, Record<string, unknown>>()
 
   constructor(options: PromptGuardCallbackOptions) {
-    const apiKey = options.apiKey ?? process.env.PROMPTGUARD_API_KEY ?? ""
-    if (!apiKey) {
-      throw new Error("PromptGuard API key required. Pass apiKey or set PROMPTGUARD_API_KEY.")
-    }
+    const { apiKey, baseUrl } = resolveCredentials(options.apiKey, options.baseUrl)
 
-    this.guard = new GuardClient({
-      apiKey,
-      baseUrl: options.baseUrl,
-      timeout: options.timeout,
-    })
-
+    this.guard = new GuardClient({ apiKey, baseUrl, timeout: options.timeout })
     this.mode = options.mode ?? "enforce"
     this.scanResponses = options.scanResponses ?? true
     this.failOpen = options.failOpen ?? true
