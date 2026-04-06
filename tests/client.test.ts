@@ -219,7 +219,7 @@ describe("SDK headers", () => {
 
     const headers = (global.fetch as jest.Mock).mock.calls[0][1].headers
     expect(headers["X-PromptGuard-SDK"]).toBe("node")
-    expect(headers["X-PromptGuard-Version"]).toBe("1.5.3")
+    expect(headers["X-PromptGuard-Version"]).toBe("1.6.0")
   })
 })
 
