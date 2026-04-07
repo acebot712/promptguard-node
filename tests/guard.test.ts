@@ -146,9 +146,9 @@ describe("GuardClient", () => {
   test("headers include auth and SDK info", () => {
     const client = new GuardClient({ apiKey: "pg_my_key" })
     const headers = (client as unknown as { headers: () => Record<string, string> }).headers()
-    expect(headers.Authorization).toBe("Bearer pg_my_key")
+    expect(headers["X-API-Key"]).toBe("pg_my_key")
     expect(headers["X-PromptGuard-SDK"]).toBe("node-auto")
-    expect(headers["X-PromptGuard-Version"]).toBe("1.6.0")
+    expect(headers["X-PromptGuard-Version"]).toBe("1.7.0")
     expect(headers["Content-Type"]).toBe("application/json")
   })
 

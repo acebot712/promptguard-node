@@ -136,7 +136,7 @@ export class GuardClient {
 
   private headers(): Record<string, string> {
     return {
-      Authorization: `Bearer ${this.apiKey}`,
+      "X-API-Key": this.apiKey,
       "Content-Type": "application/json",
       "X-PromptGuard-SDK": "node-auto",
       "X-PromptGuard-Version": SDK_VERSION,

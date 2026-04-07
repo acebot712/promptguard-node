@@ -356,7 +356,7 @@ export class PromptGuard {
         const response = await fetch(url, {
           method,
           headers: {
-            Authorization: `Bearer ${this.config.apiKey}`,
+            "X-API-Key": this.config.apiKey,
             "Content-Type": "application/json",
             "X-PromptGuard-SDK": "node",
             "X-PromptGuard-Version": SDK_VERSION,
@@ -372,12 +372,28 @@ export class PromptGuard {
 
         if (!response.ok) {
           const errorBody = (await response.json().catch(() => ({}))) as {
-            error?: { message?: string; code?: string }
+            error?: {
+              message?: string
+              code?: string
+              type?: string
+              upgrade_url?: string
+              current_plan?: string
+              requests_used?: number
+              requests_limit?: number
+            }
           }
+          const err = errorBody.error
           throw new PromptGuardError(
-            errorBody.error?.message || "Request failed",
-            errorBody.error?.code || "UNKNOWN",
+            err?.message || "Request failed",
+            err?.code || "UNKNOWN",
             response.status,
+            {
+              type: err?.type,
+              upgradeUrl: err?.upgrade_url,
+              currentPlan: err?.current_plan,
+              requestsUsed: err?.requests_used,
+              requestsLimit: err?.requests_limit,
+            },
           )
         }
 
@@ -402,12 +418,33 @@ export class PromptGuard {
 export class PromptGuardError extends Error {
   code: string
   statusCode: number
+  errorType?: string
+  upgradeUrl?: string
+  currentPlan?: string
+  requestsUsed?: number
+  requestsLimit?: number
 
-  constructor(message: string, code: string, statusCode: number) {
+  constructor(
+    message: string,
+    code: string,
+    statusCode: number,
+    extra?: {
+      type?: string
+      upgradeUrl?: string
+      currentPlan?: string
+      requestsUsed?: number
+      requestsLimit?: number
+    },
+  ) {
     super(`${code}: ${message}`)
     this.name = "PromptGuardError"
     this.code = code
     this.statusCode = statusCode
+    this.errorType = extra?.type
+    this.upgradeUrl = extra?.upgradeUrl
+    this.currentPlan = extra?.currentPlan
+    this.requestsUsed = extra?.requestsUsed
+    this.requestsLimit = extra?.requestsLimit
   }
 }
 

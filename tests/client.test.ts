@@ -219,7 +219,7 @@ describe("SDK headers", () => {
 
     const headers = (global.fetch as jest.Mock).mock.calls[0][1].headers
     expect(headers["X-PromptGuard-SDK"]).toBe("node")
-    expect(headers["X-PromptGuard-Version"]).toBe("1.6.0")
+    expect(headers["X-PromptGuard-Version"]).toBe("1.7.0")
   })
 })
 
@@ -233,5 +233,50 @@ describe("Validation", () => {
     expect(() => new PromptGuard({ apiKey: "" })).toThrow("API key required")
 
     if (originalEnv !== undefined) process.env.PROMPTGUARD_API_KEY = originalEnv
+  })
+})
+
+// ── Quota error parsing ─────────────────────────────────────────────
+
+describe("Quota error parsing", () => {
+  const savedFetch = global.fetch
+
+  afterEach(() => {
+    global.fetch = savedFetch
+  })
+
+  test("quota error includes upgrade fields", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: () =>
+        Promise.resolve({
+          error: {
+            message: "Monthly quota of 10,000 requests exceeded.",
+            type: "quota_exceeded",
+            code: "monthly_quota_exceeded",
+            current_plan: "free",
+            requests_used: 10000,
+            requests_limit: 10000,
+            upgrade_url: "https://app.promptguard.co/billing",
+          },
+        }),
+    })
+
+    const pg = makeClient()
+    try {
+      await pg.request("POST", "/test")
+      throw new Error("Expected PromptGuardError")
+    } catch (err) {
+      expect(err).toBeInstanceOf(PromptGuardError)
+      const e = err as PromptGuardError
+      expect(e.statusCode).toBe(429)
+      expect(e.code).toBe("monthly_quota_exceeded")
+      expect(e.errorType).toBe("quota_exceeded")
+      expect(e.upgradeUrl).toBe("https://app.promptguard.co/billing")
+      expect(e.currentPlan).toBe("free")
+      expect(e.requestsUsed).toBe(10000)
+      expect(e.requestsLimit).toBe(10000)
+    }
   })
 })
