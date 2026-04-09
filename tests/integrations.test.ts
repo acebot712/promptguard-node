@@ -36,7 +36,7 @@ describe("PromptGuardCallbackHandler", () => {
     )
 
     await handler.handleLLMStart(
-      { kwargs: { model_name: "gpt-4" }, id: ["ChatOpenAI"] },
+      { kwargs: { model_name: "gpt-5-nano" }, id: ["ChatOpenAI"] },
       ["Hello"],
       "run-1",
     )
@@ -44,7 +44,7 @@ describe("PromptGuardCallbackHandler", () => {
     expect(guard.scan).toHaveBeenCalledWith(
       [{ role: "user", content: "Hello" }],
       "input",
-      "gpt-4",
+      "gpt-5-nano",
       expect.objectContaining({ framework: "langchain" }),
     )
   })
@@ -111,7 +111,7 @@ describe("PromptGuardCallbackHandler", () => {
     )
 
     await handler.handleChatModelStart(
-      { kwargs: { model_name: "gpt-4o" }, id: ["ChatOpenAI"] },
+      { kwargs: { model_name: "gpt-5-nano" }, id: ["ChatOpenAI"] },
       [
         [
           { type: "system", content: "Be helpful" },
@@ -127,7 +127,7 @@ describe("PromptGuardCallbackHandler", () => {
         { role: "user", content: "Hello" },
       ],
       "input",
-      "gpt-4o",
+      "gpt-5-nano",
       expect.anything(),
     )
   })
@@ -246,7 +246,7 @@ describe("promptGuardMiddleware", () => {
 
     const params = {
       prompt: "Hello, world!",
-      modelId: "gpt-4o",
+      modelId: "gpt-5-nano",
     }
 
     const result = await mw.transformParams({ params })

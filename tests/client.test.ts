@@ -98,7 +98,7 @@ describe("Completions.create", () => {
     const pg = makeClient()
 
     const result = await pg.completions.create({
-      model: "gpt-3.5-turbo-instruct",
+      model: "gpt-5-nano",
       prompt: "Say hello",
     })
 

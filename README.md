@@ -29,7 +29,7 @@ const client = new OpenAI();
 
 // This call is automatically scanned by PromptGuard.
 const response = await client.chat.completions.create({
-  model: 'gpt-4o',
+  model: 'gpt-5-nano',
   messages: [{ role: 'user', content: 'Hello!' }],
 });
 ```
@@ -91,7 +91,7 @@ const pg = new PromptGuard({ apiKey: 'pg_xxx' });
 
 // Use exactly like the OpenAI client.
 const response = await pg.chat.completions.create({
-  model: 'gpt-4o',
+  model: 'gpt-5-nano',
   messages: [{ role: 'user', content: 'Hello!' }],
 });
 ```
@@ -130,7 +130,7 @@ const handler = new PromptGuardCallbackHandler({
 
 // Attach to a single model
 const llm = new ChatOpenAI({
-  model: 'gpt-4o',
+  model: 'gpt-5-nano',
   callbacks: [handler],
 });
 
@@ -151,7 +151,7 @@ import { wrapLanguageModel, generateText } from 'ai';
 import { promptGuardMiddleware } from 'promptguard-sdk/integrations/vercel-ai';
 
 const model = wrapLanguageModel({
-  model: openai('gpt-4o'),
+  model: openai('gpt-5-nano'),
   middleware: promptGuardMiddleware({
     apiKey: 'pg_xxx',
     mode: 'enforce',
@@ -178,7 +178,7 @@ const guard = new GuardClient({ apiKey: 'pg_xxx' });
 const decision = await guard.scan(
   [{ role: 'user', content: userInput }],
   'input',
-  'gpt-4o',
+  'gpt-5-nano',
 );
 
 if (decision.blocked) {

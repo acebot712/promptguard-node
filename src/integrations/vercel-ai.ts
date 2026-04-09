@@ -11,7 +11,7 @@
  * import { promptGuardMiddleware } from 'promptguard-sdk/integrations/vercel-ai';
  *
  * const model = wrapLanguageModel({
- *   model: openai('gpt-4o'),
+ *   model: openai('gpt-5-nano'),
  *   middleware: promptGuardMiddleware({ apiKey: 'pg_xxx' }),
  * });
  *
