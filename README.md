@@ -1,3 +1,8 @@
+[![npm version](https://img.shields.io/npm/v/promptguard)](https://www.npmjs.com/package/promptguard)
+[![CI](https://github.com/acebot712/promptguard-node/actions/workflows/ci.yml/badge.svg)](https://github.com/acebot712/promptguard-node/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/acebot712/promptguard-node)](https://github.com/acebot712/promptguard-node/blob/main/LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue)](https://www.typescriptlang.org/)
+
 # PromptGuard Node.js SDK
 
 Drop-in security for AI applications. Secure any GenAI app - regardless of framework or LLM provider.
