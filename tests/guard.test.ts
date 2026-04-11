@@ -148,7 +148,7 @@ describe("GuardClient", () => {
     const headers = (client as unknown as { headers: () => Record<string, string> }).headers()
     expect(headers["X-API-Key"]).toBe("pg_my_key")
     expect(headers["X-PromptGuard-SDK"]).toBe("node-auto")
-    expect(headers["X-PromptGuard-Version"]).toBe("1.7.0")
+    expect(headers["X-PromptGuard-Version"]).toBe("1.8.0")
     expect(headers["Content-Type"]).toBe("application/json")
   })
 
