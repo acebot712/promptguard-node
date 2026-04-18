@@ -5,23 +5,33 @@ on:
     types: [published]
   workflow_dispatch:
 
+# Default to read-only. id-token: write is escalated only on the
+# publish job that actually needs npm provenance signing.
 permissions:
-  id-token: write
   contents: read
+
+# Only one publish to npm at a time -- never two concurrent publishes
+# of the same version. Don't cancel in progress: a half-rolled-back
+# publish is worse than two queued.
+concurrency:
+  group: release-npm
+  cancel-in-progress: false
 
 jobs:
   validate:
     name: Validate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Biome check (lint + format)
         run: npx biome check .
@@ -38,7 +48,13 @@ jobs:
   publish:
     name: Publish to npm
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: validate
+    # Trusted Publishing via npm provenance needs id-token: write.
+    # contents: read is for checkout.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v6
 
@@ -46,6 +62,7 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
 
       - name: Get version
         id: version
@@ -65,7 +82,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.check.outputs.exists == 'false'
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Build
         if: steps.check.outputs.exists == 'false'

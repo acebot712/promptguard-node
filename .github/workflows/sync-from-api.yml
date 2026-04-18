@@ -5,23 +5,34 @@ on:
     types: [openapi-spec-updated]
   workflow_dispatch:
 
+# Workflow-level: minimal. Job-level escalates to write where needed.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+
+# Only one sync at a time -- two parallel runs would race on the
+# branch + PR creation.
+concurrency:
+  group: sync-types
+  cancel-in-progress: false
 
 jobs:
   sync-types:
     name: Generate Types from OpenAPI
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Download latest OpenAPI spec
         env:
