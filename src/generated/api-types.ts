@@ -73,6 +73,16 @@ export interface AutonomousRequest {
   enabled_detectors?: Array<string> | unknown
 }
 
+/** A document retrieved by a RAG pipeline to be scanned for poisoning. */
+export interface ContextDoc {
+  /** Document text content */
+  content: string
+  /** Source identifier (URL, doc ID, etc.) */
+  source?: string | unknown
+  /** Extra metadata */
+  metadata?: Record<string, unknown> | unknown
+}
+
 export interface CreateApiKeyRequest {
   /** API key name */
   name: string
@@ -125,6 +135,29 @@ export interface developer__projects__schemas__ProjectResponse {
   created_at: string
 }
 
+export interface EnrollRequest {
+  /** Enrollment token from the admin */
+  token: string
+  /** Hostname / device label */
+  device_name: string
+  /** macos | windows | browser | linux */
+  platform?: string
+  /** Employee attribution label */
+  end_user_id?: string | unknown
+}
+
+export interface EnrollResponse {
+  api_key: string
+  project_id: string
+  device_id: string
+  organization_id: string
+  enforced?: boolean
+  mode?: string
+  fail_closed?: boolean
+  ca_cert?: string | unknown
+  ca_key?: string | unknown
+}
+
 export interface ErrorDetail {
   /** Human-readable error description */
   message: string
@@ -168,6 +201,10 @@ export interface GuardRequest {
   model?: string | unknown
   /** Optional framework context */
   context?: GuardContext | unknown
+  /** RAG-retrieved documents to scan for knowledge poisoning. Each document is individually scanned before being merged into the LLM prompt. Optional; backwards-compatible. */
+  retrieved_context?: Array<ContextDoc> | unknown
+  /** Media attachments to scan for steganographic payloads, adversarial patches, and font injection. Optional. */
+  media?: Array<MediaPartSchema> | unknown
 }
 
 /** Response from the guard endpoint. */
@@ -217,6 +254,20 @@ export interface internal__redteam__router__TestSummary {
   allowed: number
   block_rate: number
   results: Array<internal__redteam__router__TestResponse>
+}
+
+/** A media attachment to be scanned for steganographic/adversarial payloads. */
+export interface MediaPartSchema {
+  /** Media type: 'image' or 'audio' */
+  type: string
+  /** MIME type, e.g. 'image/png', 'audio/wav' */
+  mime_type: string
+  /** URL to fetch the media from */
+  url?: string | unknown
+  /** Base64-encoded media data */
+  base64?: string | unknown
+  /** Extra metadata */
+  metadata?: Record<string, unknown> | unknown
 }
 
 export interface QuotaErrorDetail {
