@@ -1,4 +1,10 @@
-import { GuardApiError, GuardClient, GuardDecision, PromptGuardBlockedError } from "../src/guard"
+import {
+  GuardApiError,
+  GuardClient,
+  GuardDecision,
+  PromptGuardBlockedError,
+  safeErrorLabel,
+} from "../src/guard"
 
 // ---------------------------------------------------------------------------
 // GuardDecision
@@ -76,6 +82,48 @@ describe("GuardApiError", () => {
   test("works without status code", () => {
     const err = new GuardApiError("network error")
     expect(err.statusCode).toBeUndefined()
+  })
+
+  test("safeDescription omits the response body but keeps the status code", () => {
+    // .message may embed the raw Guard API body (which can echo prompt content).
+    const leaky = new GuardApiError(
+      'Guard API returned 500: {"prompt":"my secret password is hunter2"}',
+      500,
+    )
+    const safe = leaky.safeDescription()
+    expect(safe).toBe("Guard API error (HTTP 500)")
+    expect(safe).not.toContain("hunter2")
+    expect(safe).not.toContain("prompt")
+  })
+
+  test("safeDescription labels network errors without a status code", () => {
+    const netErr = new GuardApiError("Guard API call failed: ECONNREFUSED 10.0.0.5:443")
+    const safe = netErr.safeDescription()
+    expect(safe).toBe("Guard API unreachable (network error)")
+    expect(safe).not.toContain("10.0.0.5")
+  })
+})
+
+describe("safeErrorLabel", () => {
+  test("returns the safe description for a GuardApiError", () => {
+    const err = new GuardApiError(
+      'Guard API returned 422: {"messages":[{"content":"sensitive user prompt"}]}',
+      422,
+    )
+    const label = safeErrorLabel(err)
+    expect(label).toBe("Guard API error (HTTP 422)")
+    expect(label).not.toContain("sensitive user prompt")
+  })
+
+  test("does not echo arbitrary error contents for non-GuardApiError", () => {
+    const label = safeErrorLabel(new Error("leaked: top secret prompt body"))
+    expect(label).toBe("unexpected error")
+    expect(label).not.toContain("top secret")
+  })
+
+  test("never includes the API key", () => {
+    const err = new GuardApiError('Guard API returned 401: {"key":"pg_live_supersecret"}', 401)
+    expect(safeErrorLabel(err)).not.toContain("pg_live_supersecret")
   })
 })
 

@@ -9,7 +9,7 @@
  * ```ts
  * import { init } from 'promptguard-sdk/auto';
  *
- * init({ apiKey: 'pg_xxx' });
+ * init({ apiKey: 'pg_live_xxx' });
  *
  * // Everything below is now secured transparently.
  * import OpenAI from 'openai';
@@ -19,6 +19,7 @@
  */
 
 import { GuardClient } from "./guard"
+import { type LogLevel, logger, setLogLevel } from "./logger"
 import { resolveCredentials } from "./resolve"
 
 // ---------------------------------------------------------------------------
@@ -47,14 +48,27 @@ export interface InitOptions {
   scanResponses?: boolean
   /** HTTP timeout in ms for Guard API calls (default: `10000`). */
   timeout?: number
+  /**
+   * SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress all
+   * SDK logging, or `"info"`/`"debug"` for the init banner and more detail.
+   */
+  logLevel?: LogLevel
+  /** Convenience shorthand for `logLevel: "silent"`. */
+  silent?: boolean
 }
 
 export function init(options: InitOptions = {}): void {
+  if (options.silent) {
+    setLogLevel("silent")
+  } else if (options.logLevel) {
+    setLogLevel(options.logLevel)
+  }
+
   const { apiKey, baseUrl } = resolveCredentials(options.apiKey, options.baseUrl)
 
   const resolvedMode = options.mode ?? "enforce"
   if (resolvedMode !== "enforce" && resolvedMode !== "monitor") {
-    throw new Error("mode must be 'enforce' or 'monitor'")
+    throw new Error(`mode must be 'enforce' or 'monitor', got '${resolvedMode}'`)
   }
 
   guardClient = new GuardClient({
@@ -69,9 +83,8 @@ export function init(options: InitOptions = {}): void {
 
   applyPatches()
 
-  console.log(
-    `[promptguard] auto-instrumentation initialised (mode=${mode}, fail_open=${failOpen})`,
-  )
+  // Suppressed by default (info level). Set logLevel: "info" to see this.
+  logger.info(`auto-instrumentation initialised (mode=${mode}, fail_open=${failOpen})`)
 }
 
 export function shutdown(): void {

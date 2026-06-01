@@ -9,7 +9,7 @@
  * ```ts
  * import { PromptGuardCallbackHandler } from 'promptguard-sdk/integrations/langchain';
  *
- * const handler = new PromptGuardCallbackHandler({ apiKey: 'pg_xxx' });
+ * const handler = new PromptGuardCallbackHandler({ apiKey: 'pg_live_xxx' });
  *
  * const llm = new ChatOpenAI({ callbacks: [handler] });
  * // or
@@ -24,7 +24,9 @@ import {
   type GuardDecision,
   type GuardMessage,
   PromptGuardBlockedError,
+  safeErrorLabel,
 } from "../guard"
+import { type LogLevel, logger, setLogLevel } from "../logger"
 import { resolveCredentials } from "../resolve"
 
 // ---------------------------------------------------------------------------
@@ -35,6 +37,10 @@ export interface PromptGuardCallbackOptions extends GuardClientConfig {
   mode?: "enforce" | "monitor"
   scanResponses?: boolean
   failOpen?: boolean
+  /** SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress logs. */
+  logLevel?: LogLevel
+  /** Convenience shorthand for `logLevel: "silent"`. */
+  silent?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -53,6 +59,9 @@ export class PromptGuardCallbackHandler {
   private chainContext = new Map<string, Record<string, unknown>>()
 
   constructor(options: PromptGuardCallbackOptions) {
+    if (options.silent) setLogLevel("silent")
+    else if (options.logLevel) setLogLevel(options.logLevel)
+
     const { apiKey, baseUrl } = resolveCredentials(options.apiKey, options.baseUrl)
 
     this.guard = new GuardClient({ apiKey, baseUrl, timeout: options.timeout })
@@ -213,8 +222,13 @@ export class PromptGuardCallbackHandler {
   ): Promise<GuardDecision | null> {
     try {
       return await this.guard.scan(messages, direction, model, context)
-    } catch {
+    } catch (err) {
       if (!this.failOpen) throw new Error("Guard API unavailable")
+      logger.warn(
+        `Guard API unavailable, allowing ${direction} unscanned (failOpen=true): ${safeErrorLabel(
+          err,
+        )}`,
+      )
       return null
     }
   }
@@ -224,13 +238,13 @@ export class PromptGuardCallbackHandler {
 
     if (decision.blocked) {
       if (this.mode === "enforce") throw new PromptGuardBlockedError(decision)
-      console.warn(
-        `[promptguard][monitor] would block: ${decision.threatType} (event=${decision.eventId}, run=${runId})`,
+      logger.warn(
+        `[monitor] would block: ${decision.threatType} (event=${decision.eventId}, run=${runId})`,
       )
     }
 
     if (decision.redacted) {
-      console.info(`[promptguard] redacted content (event=${decision.eventId}, run=${runId})`)
+      logger.info(`redacted content (event=${decision.eventId}, run=${runId})`)
     }
   }
 

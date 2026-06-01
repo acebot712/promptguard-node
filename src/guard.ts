@@ -34,6 +34,13 @@ export interface GuardRequestBody {
   context?: GuardContext
 }
 
+/** Options-object form for {@link GuardClient.scan}. */
+export interface ScanOptions {
+  direction?: "input" | "output"
+  model?: string
+  context?: GuardContext
+}
+
 export interface ThreatDetail {
   type: string
   confidence: number
@@ -96,6 +103,33 @@ export class GuardApiError extends Error {
     this.name = "GuardApiError"
     this.statusCode = statusCode
   }
+
+  /**
+   * A content-free description safe to write to logs.
+   *
+   * The `.message` of a {@link GuardApiError} may embed the raw Guard API
+   * response body (see {@link GuardClient.scan}), which can echo prompt
+   * content. Loggers must use this instead of `.message` so they never
+   * leak prompt content, response bodies, or the API key.
+   */
+  safeDescription(): string {
+    return this.statusCode !== undefined
+      ? `Guard API error (HTTP ${this.statusCode})`
+      : "Guard API unreachable (network error)"
+  }
+}
+
+/**
+ * Return a log-safe description for an error caught on the fail-open path.
+ *
+ * For a {@link GuardApiError} this emits only HTTP status + a static message
+ * (never the response body or prompt content). Any other error type is a real
+ * bug that the fail-open paths re-throw before reaching here, so we fall back
+ * to a generic label rather than risk logging arbitrary contents.
+ */
+export function safeErrorLabel(err: unknown): string {
+  if (err instanceof GuardApiError) return err.safeDescription()
+  return "unexpected error"
 }
 
 export class PromptGuardBlockedError extends Error {
@@ -148,13 +182,37 @@ export class GuardClient {
    *
    * Throws {@link GuardApiError} on network/API errors so the caller
    * can decide whether to fail open or closed.
+   *
+   * Two call styles are supported:
+   * ```ts
+   * // Options object (preferred, matches the rest of the SDK):
+   * await guard.scan(messages, { direction: "input", model: "gpt-5-nano" })
+   * // Positional (back-compat):
+   * await guard.scan(messages, "input", "gpt-5-nano")
+   * ```
    */
+  async scan(messages: GuardMessage[], options?: ScanOptions): Promise<GuardDecision>
   async scan(
     messages: GuardMessage[],
-    direction: "input" | "output" = "input",
+    direction?: "input" | "output",
+    model?: string,
+    context?: GuardContext,
+  ): Promise<GuardDecision>
+  async scan(
+    messages: GuardMessage[],
+    directionOrOptions: "input" | "output" | ScanOptions = "input",
     model?: string,
     context?: GuardContext,
   ): Promise<GuardDecision> {
+    let direction: "input" | "output"
+    if (typeof directionOrOptions === "object") {
+      direction = directionOrOptions.direction ?? "input"
+      model = directionOrOptions.model
+      context = directionOrOptions.context
+    } else {
+      direction = directionOrOptions
+    }
+
     const payload: GuardRequestBody = { messages, direction }
     if (model) payload.model = model
     if (context) payload.context = context

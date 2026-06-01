@@ -7,7 +7,7 @@
  * @example
  * ```ts
  * import { init } from 'promptguard-sdk';
- * init({ apiKey: 'pg_xxx' });
+ * init({ apiKey: 'pg_live_xxx' });
  * // All LLM calls are now secured automatically.
  * ```
  *
@@ -15,7 +15,7 @@
  * @example
  * ```ts
  * import { PromptGuard } from 'promptguard-sdk';
- * const pg = new PromptGuard({ apiKey: 'pg_xxx' });
+ * const pg = new PromptGuard({ apiKey: 'pg_live_xxx' });
  * const response = await pg.chat.completions.create({ ... });
  * ```
  *
@@ -42,9 +42,11 @@ export {
   type GuardRequestBody,
   type GuardResponseBody,
   PromptGuardBlockedError,
+  type ScanOptions,
   type ThreatDetail,
 } from "./guard"
-
 // Framework integrations (re-exported for convenience)
 export { PromptGuardCallbackHandler } from "./integrations/langchain"
 export { promptGuardMiddleware } from "./integrations/vercel-ai"
+// Logging controls
+export { getLogLevel, type LogLevel, setLogLevel } from "./logger"

@@ -2,6 +2,7 @@
  * Tests for PromptGuard client -- namespace parity, new APIs, retry logic.
  */
 
+import { ensureProxySuffix } from "../src/client"
 import { PromptGuard, PromptGuardError } from "../src/index"
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -233,6 +234,57 @@ describe("Validation", () => {
     expect(() => new PromptGuard({ apiKey: "" })).toThrow("API key required")
 
     if (originalEnv !== undefined) process.env.PROMPTGUARD_API_KEY = originalEnv
+  })
+})
+
+// ── Proxy base-URL suffix logic ──────────────────────────────────────
+
+describe("ensureProxySuffix", () => {
+  test.each([
+    // Appends /proxy when missing.
+    ["https://api.promptguard.co/api/v1", "https://api.promptguard.co/api/v1/proxy"],
+    // Trailing slash is stripped before appending.
+    ["https://api.promptguard.co/api/v1/", "https://api.promptguard.co/api/v1/proxy"],
+    // Already suffixed -> unchanged.
+    ["https://api.promptguard.co/api/v1/proxy", "https://api.promptguard.co/api/v1/proxy"],
+    // Already suffixed with trailing slash -> normalized.
+    ["https://api.promptguard.co/api/v1/proxy/", "https://api.promptguard.co/api/v1/proxy"],
+    // Host with explicit port is preserved.
+    ["http://localhost:8080/api/v1", "http://localhost:8080/api/v1/proxy"],
+    // Host-only URL.
+    ["https://test.promptguard.co", "https://test.promptguard.co/proxy"],
+  ])("%s -> %s", (input, expected) => {
+    expect(ensureProxySuffix(input)).toBe(expected)
+  })
+
+  test("preserves query string", () => {
+    expect(ensureProxySuffix("https://api.promptguard.co/api/v1?foo=bar")).toBe(
+      "https://api.promptguard.co/api/v1/proxy?foo=bar",
+    )
+  })
+
+  test("preserves query string with trailing slash", () => {
+    expect(ensureProxySuffix("https://api.promptguard.co/api/v1/?foo=bar")).toBe(
+      "https://api.promptguard.co/api/v1/proxy?foo=bar",
+    )
+  })
+
+  test("preserves fragment", () => {
+    expect(ensureProxySuffix("https://api.promptguard.co/api/v1#frag")).toBe(
+      "https://api.promptguard.co/api/v1/proxy#frag",
+    )
+  })
+
+  test("does not double-append when already suffixed with a query", () => {
+    expect(ensureProxySuffix("https://api.promptguard.co/api/v1/proxy?x=1")).toBe(
+      "https://api.promptguard.co/api/v1/proxy?x=1",
+    )
+  })
+
+  test("does not match 'proxy' as a substring of the last segment", () => {
+    expect(ensureProxySuffix("https://api.promptguard.co/api/v1/myproxy")).toBe(
+      "https://api.promptguard.co/api/v1/myproxy/proxy",
+    )
   })
 })
 

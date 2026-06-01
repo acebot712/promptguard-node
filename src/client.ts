@@ -150,7 +150,13 @@ interface RedTeamSummary {
 
 interface AutonomousRedTeamRequest {
   budget?: number
+  /** Target preset to attack (camelCase, preferred). */
+  targetPreset?: string
+  /** Detectors to enable for the run (camelCase, preferred). */
+  enabledDetectors?: string[]
+  /** @deprecated snake_case alias for `targetPreset`; kept for back-compat. */
   target_preset?: string
+  /** @deprecated snake_case alias for `enabledDetectors`; kept for back-compat. */
   enabled_detectors?: string[]
 }
 
@@ -176,6 +182,34 @@ interface IntelligenceStats {
 
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504])
 const PROXY_BASE_URL = `${DEFAULT_BASE_URL}/proxy`
+
+/**
+ * Ensure the proxy base URL's path ends with `/proxy`.
+ *
+ * The proxy endpoints live under `/api/v1/proxy`. Users frequently set
+ * `PROMPTGUARD_BASE_URL` (or pass `baseUrl`) to `.../api/v1` without the
+ * `/proxy` suffix, which would route proxy requests to the wrong path.
+ * Append it when missing so requests always land on the proxy.
+ *
+ * Uses `URL` parsing so a trailing slash, query string, or fragment is handled
+ * correctly and the scheme/host/port/query/fragment are preserved exactly.
+ */
+export function ensureProxySuffix(baseUrl: string): string {
+  let url: URL
+  try {
+    url = new URL(baseUrl)
+  } catch {
+    // Not a parseable absolute URL — fall back to safe string handling so we
+    // never throw from the constructor on an unusual but intended value.
+    const trimmed = baseUrl.replace(/\/+$/, "")
+    return trimmed.split("/").pop() === "proxy" ? trimmed : `${trimmed}/proxy`
+  }
+  // Strip a single trailing slash from the path so we operate on segments.
+  const path = url.pathname.endsWith("/") ? url.pathname.slice(0, -1) : url.pathname
+  // Append /proxy only when the last path segment isn't already "proxy".
+  url.pathname = path.split("/").pop() === "proxy" ? path : `${path}/proxy`
+  return url.toString()
+}
 
 class ChatCompletions {
   private client: PromptGuard
@@ -301,10 +335,13 @@ class RedTeam {
     })
   }
   async runAutonomous(options?: AutonomousRedTeamRequest): Promise<AutonomousRedTeamReport> {
+    // Accept camelCase (preferred) with snake_case aliases for back-compat.
+    const targetPreset = options?.targetPreset ?? options?.target_preset ?? "default"
+    const enabledDetectors = options?.enabledDetectors ?? options?.enabled_detectors
     return this.client.request<AutonomousRedTeamReport>("POST", `${this.base}/autonomous`, {
       budget: options?.budget ?? 100,
-      target_preset: options?.target_preset ?? "default",
-      ...(options?.enabled_detectors && { enabled_detectors: options.enabled_detectors }),
+      target_preset: targetPreset,
+      ...(enabledDetectors && { enabled_detectors: enabledDetectors }),
     })
   }
   async intelligenceStats(): Promise<IntelligenceStats> {
@@ -332,10 +369,12 @@ export class PromptGuard {
 
     this.config = {
       apiKey,
-      baseUrl,
+      baseUrl: ensureProxySuffix(baseUrl),
       timeout: config.timeout ?? 30000,
-      maxRetries: config.maxRetries ?? 3,
-      retryDelay: config.retryDelay ?? 1000,
+      // Clamp to >= 0 so a negative value can never collapse the request loop
+      // to zero attempts (which would silently skip the security scan).
+      maxRetries: Math.max(0, config.maxRetries ?? 3),
+      retryDelay: Math.max(0, config.retryDelay ?? 1000),
     }
 
     this.chat = new Chat(this)
