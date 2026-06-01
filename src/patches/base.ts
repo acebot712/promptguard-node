@@ -11,7 +11,9 @@ import {
   type GuardClient,
   type GuardMessage,
   PromptGuardBlockedError,
+  safeErrorLabel,
 } from "../guard"
+import { logger } from "../logger"
 
 export interface PatchConfig {
   framework: string
@@ -46,14 +48,18 @@ export function createPatchedMethod(
       try {
         decision = await guard.scan(messages, "input", model, { framework: config.framework })
       } catch (err: unknown) {
-        if (err instanceof GuardApiError && !isFailOpen()) throw err
+        // Only the Guard API being unreachable is eligible for fail-open.
+        // Any other error is a real bug and must surface.
+        if (!(err instanceof GuardApiError)) throw err
+        if (!isFailOpen()) throw err
+        logger.warn(
+          `Guard API unavailable, allowing request unscanned (failOpen=true): ${safeErrorLabel(err)}`,
+        )
       }
 
       if (decision?.blocked) {
         if (getMode() === "enforce") throw new PromptGuardBlockedError(decision)
-        console.warn(
-          `[promptguard][monitor] would block: ${decision.threatType} (event=${decision.eventId})`,
-        )
+        logger.warn(`[monitor] would block: ${decision.threatType} (event=${decision.eventId})`)
       }
 
       if (decision?.redacted && decision.redactedMessages && config.applyRedaction) {
@@ -80,7 +86,12 @@ export function createPatchedMethod(
         }
       } catch (err: unknown) {
         if (err instanceof PromptGuardBlockedError) throw err
-        if (err instanceof GuardApiError && !isFailOpen()) throw err
+        // Only swallow Guard API outages under fail-open; surface real bugs.
+        if (!(err instanceof GuardApiError)) throw err
+        if (!isFailOpen()) throw err
+        logger.warn(
+          `Guard API unavailable, response left unscanned (failOpen=true): ${safeErrorLabel(err)}`,
+        )
       }
     }
 

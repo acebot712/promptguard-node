@@ -12,7 +12,7 @@
  *
  * const model = wrapLanguageModel({
  *   model: openai('gpt-5-nano'),
- *   middleware: promptGuardMiddleware({ apiKey: 'pg_xxx' }),
+ *   middleware: promptGuardMiddleware({ apiKey: 'pg_live_xxx' }),
  * });
  *
  * const { text } = await generateText({ model, prompt: 'Hello!' });
@@ -24,7 +24,9 @@ import {
   type GuardClientConfig,
   type GuardMessage,
   PromptGuardBlockedError,
+  safeErrorLabel,
 } from "../guard"
+import { type LogLevel, logger, setLogLevel } from "../logger"
 import { resolveCredentials } from "../resolve"
 
 // ---------------------------------------------------------------------------
@@ -35,6 +37,10 @@ export interface PromptGuardMiddlewareOptions extends GuardClientConfig {
   mode?: "enforce" | "monitor"
   scanResponses?: boolean
   failOpen?: boolean
+  /** SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress logs. */
+  logLevel?: LogLevel
+  /** Convenience shorthand for `logLevel: "silent"`. */
+  silent?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +55,9 @@ export interface PromptGuardMiddlewareOptions extends GuardClientConfig {
  * interface (`transformParams` + `wrapGenerate`).
  */
 export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
+  if (options.silent) setLogLevel("silent")
+  else if (options.logLevel) setLogLevel(options.logLevel)
+
   const { apiKey, baseUrl } = resolveCredentials(options.apiKey, options.baseUrl)
 
   const guard = new GuardClient({ apiKey, baseUrl, timeout: options.timeout })
@@ -79,9 +88,7 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
 
         if (decision.blocked) {
           if (mode === "enforce") throw new PromptGuardBlockedError(decision)
-          console.warn(
-            `[promptguard][monitor] would block: ${decision.threatType} (event=${decision.eventId})`,
-          )
+          logger.warn(`[monitor] would block: ${decision.threatType} (event=${decision.eventId})`)
         }
 
         if (decision.redacted && decision.redactedMessages && mode === "enforce") {
@@ -93,6 +100,9 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
       } catch (err) {
         if (err instanceof PromptGuardBlockedError) throw err
         if (!failOpen) throw err
+        logger.warn(
+          `Guard API unavailable, allowing input unscanned (failOpen=true): ${safeErrorLabel(err)}`,
+        )
       }
 
       return params
@@ -128,13 +138,16 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
               if (mode === "enforce") {
                 throw new PromptGuardBlockedError(respDecision)
               }
-              console.warn(
-                `[promptguard][monitor] would block response: ${respDecision.threatType}`,
-              )
+              logger.warn(`[monitor] would block response: ${respDecision.threatType}`)
             }
           } catch (err) {
             if (err instanceof PromptGuardBlockedError) throw err
             if (!failOpen) throw err
+            logger.warn(
+              `Guard API unavailable, response left unscanned (failOpen=true): ${safeErrorLabel(
+                err,
+              )}`,
+            )
           }
 
           return result

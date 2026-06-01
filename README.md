@@ -1,4 +1,4 @@
-[![npm version](https://img.shields.io/npm/v/promptguard)](https://www.npmjs.com/package/promptguard)
+[![npm version](https://img.shields.io/npm/v/promptguard-sdk)](https://www.npmjs.com/package/promptguard-sdk)
 [![CI](https://github.com/acebot712/promptguard-node/actions/workflows/ci.yml/badge.svg)](https://github.com/acebot712/promptguard-node/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/acebot712/promptguard-node)](https://github.com/acebot712/promptguard-node/blob/main/LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue)](https://www.typescriptlang.org/)
@@ -13,18 +13,34 @@ Drop-in security for AI applications. Secure any GenAI app - regardless of frame
 npm install promptguard-sdk
 ```
 
+> The npm package and the import specifier are both **`promptguard-sdk`** — no surprises:
+> ```typescript
+> import { init, PromptGuard } from 'promptguard-sdk';
+> ```
+
+Get a free API key at [app.promptguard.co](https://app.promptguard.co).
+
+> **The SDK reads `PROMPTGUARD_API_KEY` from the environment; it does not auto-load `.env`.** Use [dotenv](https://www.npmjs.com/package/dotenv) (call `import 'dotenv/config'` first) if you keep secrets in a `.env` file.
+
+> **PromptGuard fails open by default** — if the Guard API is unavailable, calls proceed *unscanned* so your app stays up. Set `failOpen: false` to block (fail closed) on a Guard outage instead.
+
+> **Module format:** the package currently ships **CommonJS** (`require`) builds. It works in ESM projects via Node's CJS interop (`import { init } from 'promptguard-sdk'` transpiles to a `require`), and in plain CommonJS via `const { init } = require('promptguard-sdk')`.
+
 ## Option 1: Auto-Instrumentation (Recommended)
 
 One line secures **every** LLM call in your application - no matter which framework you use.
 
 ```typescript
+// All imports first — ES module imports are hoisted and always run before
+// any other statement, regardless of their position in the file.
 import { init } from 'promptguard-sdk';
-
-// Call once at startup - before any LLM SDK usage.
-init({ apiKey: 'pg_xxx' });
-
-// Everything below is now secured transparently.
 import OpenAI from 'openai';
+
+// init() runs as the first executed statement and patches the SDK prototypes.
+// Patching works regardless of import order, so you don't need to worry about
+// importing the LLM SDK "after" calling init().
+init({ apiKey: 'pg_live_xxx' });
+
 const client = new OpenAI();
 
 // This call is automatically scanned by PromptGuard.
@@ -52,17 +68,17 @@ Any framework built on these SDKs is automatically covered: **LangChain.js**, **
 
 ```typescript
 // Enforce mode (default) - blocks policy violations.
-init({ apiKey: 'pg_xxx', mode: 'enforce' });
+init({ apiKey: 'pg_live_xxx', mode: 'enforce' });
 
 // Monitor mode - logs threats but never blocks. Good for shadow deployment.
-init({ apiKey: 'pg_xxx', mode: 'monitor' });
+init({ apiKey: 'pg_live_xxx', mode: 'monitor' });
 ```
 
 ### Options
 
 ```typescript
 init({
-  apiKey: 'pg_xxx',           // or set PROMPTGUARD_API_KEY env var
+  apiKey: 'pg_live_xxx',           // or set PROMPTGUARD_API_KEY env var
   baseUrl: 'https://...',     // or set PROMPTGUARD_BASE_URL env var
   mode: 'enforce',            // 'enforce' | 'monitor'
   failOpen: true,             // allow calls when Guard API is unreachable
@@ -87,7 +103,7 @@ Route LLM traffic through PromptGuard. Just swap your base URL.
 ```typescript
 import { PromptGuard } from 'promptguard-sdk';
 
-const pg = new PromptGuard({ apiKey: 'pg_xxx' });
+const pg = new PromptGuard({ apiKey: 'pg_live_xxx' });
 
 // Use exactly like the OpenAI client.
 const response = await pg.chat.completions.create({
@@ -123,7 +139,7 @@ import { PromptGuardCallbackHandler } from 'promptguard-sdk/integrations/langcha
 import { ChatOpenAI } from '@langchain/openai';
 
 const handler = new PromptGuardCallbackHandler({
-  apiKey: 'pg_xxx',
+  apiKey: 'pg_live_xxx',
   mode: 'enforce',
   scanResponses: true,
 });
@@ -153,7 +169,7 @@ import { promptGuardMiddleware } from 'promptguard-sdk/integrations/vercel-ai';
 const model = wrapLanguageModel({
   model: openai('gpt-5-nano'),
   middleware: promptGuardMiddleware({
-    apiKey: 'pg_xxx',
+    apiKey: 'pg_live_xxx',
     mode: 'enforce',
     scanResponses: true,
   }),
@@ -172,13 +188,12 @@ Use the Guard client directly for maximum control:
 ```typescript
 import { GuardClient } from 'promptguard-sdk';
 
-const guard = new GuardClient({ apiKey: 'pg_xxx' });
+const guard = new GuardClient({ apiKey: 'pg_live_xxx' });
 
-// Scan before sending to LLM
+// Scan before sending to LLM (options-object form, preferred)
 const decision = await guard.scan(
   [{ role: 'user', content: userInput }],
-  'input',
-  'gpt-5-nano',
+  { direction: 'input', model: 'gpt-5-nano' },
 );
 
 if (decision.blocked) {
@@ -191,8 +206,11 @@ if (decision.blocked) {
 // Scan LLM response
 const outputDecision = await guard.scan(
   [{ role: 'assistant', content: llmOutput }],
-  'output',
+  { direction: 'output' },
 );
+
+// The positional form still works for back-compat:
+// await guard.scan(messages, 'input', 'gpt-5-nano');
 ```
 
 ## Retry Logic
@@ -201,9 +219,9 @@ Both `PromptGuard` and `GuardClient` support configurable retry behavior for tra
 
 ```typescript
 const pg = new PromptGuard({
-  apiKey: 'pg_xxx',
-  maxRetries: 3,      // Number of retry attempts (default: 2)
-  retryDelay: 500,     // Base delay in ms between retries (default: 250)
+  apiKey: 'pg_live_xxx',
+  maxRetries: 3,      // Number of retry attempts (default: 3)
+  retryDelay: 500,     // Base delay in ms between retries (default: 1000)
 });
 ```
 
@@ -250,12 +268,12 @@ if (!validation.allowed) {
 ## Red Team Testing
 
 ```typescript
-const pg = new PromptGuard({ apiKey: 'pg_xxx' });
+const pg = new PromptGuard({ apiKey: 'pg_live_xxx' });
 
 // Run the autonomous red team agent (LLM-powered mutation)
 const report = await pg.redteam.runAutonomous({
   budget: 200,
-  target_preset: 'support_bot:strict',
+  targetPreset: 'support_bot:strict', // snake_case `target_preset` also accepted
 });
 console.log(`Grade: ${report.grade}, Bypass rate: ${(report.bypass_rate * 100).toFixed(0)}%`);
 
@@ -274,6 +292,12 @@ console.log(`Total patterns: ${stats.total_patterns}`);
 | `failOpen` | - | `true` | Allow calls when Guard API is unreachable |
 | `scanResponses` | - | `false` | Also scan LLM responses |
 | `timeout` | - | `10000` | HTTP timeout in milliseconds |
+| `logLevel` | - | `"warn"` | SDK log verbosity: `"debug"`, `"info"`, `"warn"`, `"error"`, `"silent"` |
+| `silent` | - | `false` | Shorthand for `logLevel: "silent"` |
+
+> The proxy client (`PromptGuard`) talks to the `/api/v1/proxy` endpoints. If you set `baseUrl` / `PROMPTGUARD_BASE_URL` to `.../api/v1` (without `/proxy`), the SDK appends the `/proxy` suffix for you, so requests still land on the proxy.
+>
+> **Security:** the SDK sends your API key (and, in proxy mode, your prompt content) to whatever `PROMPTGUARD_BASE_URL` points at. Self-hosting is supported, so only point it at a host you trust.
 
 ## Error Handling
 

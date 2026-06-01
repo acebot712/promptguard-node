@@ -12,7 +12,8 @@ export function resolveCredentials(
   const key = apiKey ?? process.env.PROMPTGUARD_API_KEY ?? ""
   if (!key) {
     throw new Error(
-      "PromptGuard API key required. Pass apiKey or set the PROMPTGUARD_API_KEY environment variable.",
+      "API key required. Pass apiKey or set the PROMPTGUARD_API_KEY environment variable. " +
+        "Get a key at https://app.promptguard.co",
     )
   }
   return {
