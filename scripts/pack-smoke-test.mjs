@@ -89,6 +89,37 @@ try {
       { cwd: appDir },
     )
   })
+
+  // Named exports only: there must be NO default export (a default export is an
+  // ESM footgun — `import PromptGuard from 'promptguard-sdk'` would bind to the
+  // namespace object, not the class). Guard both module systems so the removal
+  // can't silently regress.
+  check("no default export (CJS)", () => {
+    run(
+      "node",
+      [
+        "-e",
+        `const sdk = require(${JSON.stringify(pkg.name)})\n` +
+          `if ("default" in sdk) throw new Error("unexpected default export on CJS namespace")`,
+      ],
+      { cwd: appDir },
+    )
+  })
+  check("no default export, named import works (ESM)", () => {
+    run(
+      "node",
+      [
+        "--input-type=module",
+        "-e",
+        `import * as ns from ${JSON.stringify(pkg.name)}\n` +
+          `if ("default" in ns && typeof ns.default?.name === "string" && ns.default.name === "PromptGuard") ` +
+          `throw new Error("default export resolves to the PromptGuard class — footgun reintroduced")\n` +
+          `const { PromptGuard } = ns\n` +
+          `if (typeof PromptGuard !== "function") throw new Error("named PromptGuard export missing")`,
+      ],
+      { cwd: appDir },
+    )
+  })
 } finally {
   fs.rmSync(workDir, { recursive: true, force: true })
 }

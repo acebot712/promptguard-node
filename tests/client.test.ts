@@ -433,14 +433,25 @@ describe("SDK headers", () => {
 // ── Validation ───────────────────────────────────────────────────────
 
 describe("Validation", () => {
-  test("throws without API key", () => {
+  test("throws a typed PromptGuardError (code=missing_api_key) without API key", () => {
     const originalEnv = process.env.PROMPTGUARD_API_KEY
     // `process.env.X = undefined` would set the literal string "undefined";
     // the variable must actually be removed for the test to be meaningful.
     Reflect.deleteProperty(process.env, "PROMPTGUARD_API_KEY")
 
     try {
+      // Message is preserved verbatim...
       expect(() => new PromptGuard({ apiKey: "" })).toThrow("API key required")
+      // ...but it is a typed error so callers can branch structurally instead
+      // of string-matching the message.
+      let caught: unknown
+      try {
+        new PromptGuard({ apiKey: "" })
+      } catch (err) {
+        caught = err
+      }
+      expect(caught).toBeInstanceOf(PromptGuardError)
+      expect((caught as PromptGuardError).code).toBe("missing_api_key")
     } finally {
       if (originalEnv !== undefined) process.env.PROMPTGUARD_API_KEY = originalEnv
       else Reflect.deleteProperty(process.env, "PROMPTGUARD_API_KEY")

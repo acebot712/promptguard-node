@@ -4,13 +4,19 @@
  */
 
 import { DEFAULT_BASE_URL, resolveCredentials } from "./resolve"
+import {
+  computeRetryDelayMs,
+  isRetryableNetworkError,
+  parseRetryAfterMs,
+  RETRYABLE_STATUS_CODES,
+} from "./retry"
 import { SDK_VERSION } from "./version"
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-interface PromptGuardConfig {
+export interface PromptGuardConfig {
   apiKey: string
   baseUrl?: string
   timeout?: number
@@ -22,12 +28,12 @@ interface PromptGuardConfig {
 // Request / response shapes
 // ---------------------------------------------------------------------------
 
-interface Message {
-  role: "system" | "user" | "assistant"
+export interface Message {
+  role: "system" | "user" | "assistant" | "tool" | "function"
   content: string
 }
 
-interface ChatCompletionRequest {
+export interface ChatCompletionRequest {
   model: string
   messages: Message[]
   temperature?: number
@@ -36,7 +42,7 @@ interface ChatCompletionRequest {
   [key: string]: unknown
 }
 
-interface ChatCompletionResponse {
+export interface ChatCompletionResponse {
   id: string
   object: string
   created: number
@@ -53,7 +59,7 @@ interface ChatCompletionResponse {
   }
 }
 
-interface CompletionRequest {
+export interface CompletionRequest {
   model: string
   prompt: string
   temperature?: number
@@ -61,7 +67,7 @@ interface CompletionRequest {
   [key: string]: unknown
 }
 
-interface CompletionResponse {
+export interface CompletionResponse {
   id: string
   object: string
   created: number
@@ -78,13 +84,13 @@ interface CompletionResponse {
   }
 }
 
-interface EmbeddingRequest {
+export interface EmbeddingRequest {
   model: string
   input: string | string[]
   [key: string]: unknown
 }
 
-interface EmbeddingResponse {
+export interface EmbeddingResponse {
   object: string
   data: Array<{
     object: string
@@ -98,7 +104,7 @@ interface EmbeddingResponse {
   }
 }
 
-interface SecurityScanResult {
+export interface SecurityScanResult {
   blocked: boolean
   decision: "allow" | "block" | "redact"
   reason?: string
@@ -106,13 +112,13 @@ interface SecurityScanResult {
   confidence?: number
 }
 
-interface RedactResult {
+export interface RedactResult {
   original: string
   redacted: string
   piiFound: string[]
 }
 
-interface ScrapeResult {
+export interface ScrapeResult {
   url: string
   status: "safe" | "blocked"
   content: string
@@ -120,7 +126,7 @@ interface ScrapeResult {
   message?: string
 }
 
-interface ToolValidationResult {
+export interface ToolValidationResult {
   allowed: boolean
   risk_score: number
   risk_level: string
@@ -129,7 +135,7 @@ interface ToolValidationResult {
   blocked_reasons: string[]
 }
 
-interface RedTeamTestResult {
+export interface RedTeamTestResult {
   test_name: string
   prompt: string
   decision: string
@@ -140,7 +146,7 @@ interface RedTeamTestResult {
   details: Record<string, unknown>
 }
 
-interface RedTeamSummary {
+export interface RedTeamSummary {
   total_tests: number
   blocked: number
   allowed: number
@@ -148,7 +154,7 @@ interface RedTeamSummary {
   results: RedTeamTestResult[]
 }
 
-interface AutonomousRedTeamRequest {
+export interface AutonomousRedTeamRequest {
   budget?: number
   /** Target preset to attack (camelCase, preferred). */
   targetPreset?: string
@@ -160,7 +166,7 @@ interface AutonomousRedTeamRequest {
   enabled_detectors?: string[]
 }
 
-interface AutonomousRedTeamReport {
+export interface AutonomousRedTeamReport {
   grade: string
   bypass_rate: number
   total_attempts: number
@@ -169,7 +175,7 @@ interface AutonomousRedTeamReport {
   recommendations: string[]
 }
 
-interface IntelligenceStats {
+export interface IntelligenceStats {
   total_patterns: number
   by_category: Record<string, number>
   by_severity: Record<string, number>
@@ -180,7 +186,6 @@ interface IntelligenceStats {
 // Namespace classes
 // ---------------------------------------------------------------------------
 
-const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504])
 const PROXY_BASE_URL = `${DEFAULT_BASE_URL}/proxy`
 
 /**
@@ -202,30 +207,6 @@ function serializeCompletionParams(params: Record<string, unknown>): Record<stri
   const { maxTokens, ...rest } = params
   if (maxTokens !== undefined) rest.max_tokens = maxTokens
   return rest
-}
-
-/**
- * Upper bound on a server-provided `Retry-After` delay. A hostile or
- * misconfigured server must not be able to park the client for hours.
- */
-const MAX_RETRY_AFTER_MS = 60_000
-
-/**
- * Parse a `Retry-After` header value (delta-seconds or HTTP-date) into a
- * delay in milliseconds, or `null` when absent/unparseable. Clamped to
- * {@link MAX_RETRY_AFTER_MS}.
- */
-function parseRetryAfterMs(header: string | null | undefined): number | null {
-  if (!header) return null
-  const seconds = Number(header)
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS)
-  }
-  const dateMs = Date.parse(header)
-  if (!Number.isNaN(dateMs)) {
-    return Math.min(Math.max(0, dateMs - Date.now()), MAX_RETRY_AFTER_MS)
-  }
-  return null
 }
 
 /**
@@ -254,35 +235,6 @@ export function ensureProxySuffix(baseUrl: string): string {
   // Append /proxy only when the last path segment isn't already "proxy".
   url.pathname = path.split("/").pop() === "proxy" ? path : `${path}/proxy`
   return url.toString()
-}
-
-/**
- * Whether a fetch-level failure is worth retrying.
- *
- * Undici surfaces network dispatch failures as `TypeError("fetch failed")`
- * with a `cause`; aborts/timeouts carry the corresponding `name`. Everything
- * else thrown before or during dispatch (circular-JSON serialization,
- * invalid header values) is deterministic and retrying it just delays the
- * real error.
- */
-const RETRYABLE_ERRNO = new Set([
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "EPIPE",
-  "ETIMEDOUT",
-  "EAI_AGAIN",
-  "ENOTFOUND",
-])
-function isRetryableNetworkError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false
-  if (err.name === "AbortError" || err.name === "TimeoutError") return true
-  // `Error.cause` needs lib es2022; this tsconfig targets earlier, so read it
-  // through a structural cast.
-  const cause = (err as Error & { cause?: unknown }).cause
-  const code =
-    (err as NodeJS.ErrnoException).code ?? (cause as NodeJS.ErrnoException | undefined)?.code
-  if (code !== undefined && RETRYABLE_ERRNO.has(code)) return true
-  return err instanceof TypeError && (cause !== undefined || err.message === "fetch failed")
 }
 
 /**
@@ -520,10 +472,9 @@ export class PromptGuard {
           await response.body?.cancel().catch(() => {})
           // Honor Retry-After when the server provides one; otherwise use
           // exponential backoff. Add small jitter to avoid thundering herds.
-          const backoff = this.config.retryDelay * 2 ** attempt
           const retryAfterMs = parseRetryAfterMs(response.headers?.get?.("retry-after"))
-          const delay = retryAfterMs ?? backoff
-          await new Promise((r) => setTimeout(r, delay + Math.random() * 0.25 * backoff))
+          const delay = computeRetryDelayMs(this.config.retryDelay, attempt, retryAfterMs)
+          await new Promise((r) => setTimeout(r, delay))
           continue
         }
 
@@ -566,8 +517,9 @@ export class PromptGuard {
             response.status,
           )
           if (attempt < this.config.maxRetries) {
-            const backoff = this.config.retryDelay * 2 ** attempt
-            await new Promise((r) => setTimeout(r, backoff + Math.random() * 0.25 * backoff))
+            await new Promise((r) =>
+              setTimeout(r, computeRetryDelayMs(this.config.retryDelay, attempt)),
+            )
             continue
           }
           throw lastError
@@ -582,8 +534,9 @@ export class PromptGuard {
         if (attempt < this.config.maxRetries) {
           // Mirror the status-code retry path: exponential backoff plus
           // jitter so concurrent clients don't retry in lockstep.
-          const backoff = this.config.retryDelay * 2 ** attempt
-          await new Promise((r) => setTimeout(r, backoff + Math.random() * 0.25 * backoff))
+          await new Promise((r) =>
+            setTimeout(r, computeRetryDelayMs(this.config.retryDelay, attempt)),
+          )
         }
       }
     }
@@ -617,7 +570,9 @@ export class PromptGuardError extends Error {
       requestsLimit?: number
     },
   ) {
-    super(`${code}: ${message}`)
+    // Keep the human-readable message clean; the machine-readable `code` is
+    // exposed as a structured field (not prefixed onto `.message`).
+    super(message)
     this.name = "PromptGuardError"
     this.code = code
     this.statusCode = statusCode
@@ -628,5 +583,3 @@ export class PromptGuardError extends Error {
     this.requestsLimit = extra?.requestsLimit
   }
 }
-
-export default PromptGuard

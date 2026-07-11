@@ -56,7 +56,9 @@ describe("Error contract", () => {
         expect(err).toBeInstanceOf(PromptGuardError)
         const e = err as PromptGuardError
         expect(e.statusCode).toBe(tc.status_code)
-        expect(e.message).toContain(tc.expect.code as string)
+        // `.code` is the structured machine-readable field; `.message` is kept
+        // clean (no `code:` prefix), so assert on the field, not the message.
+        expect(e.code).toBe(tc.expect.code as string)
 
         if (tc.expect.type) {
           expect(e.errorType).toBe(tc.expect.type)
