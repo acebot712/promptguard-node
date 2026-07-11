@@ -70,6 +70,34 @@ export function extractResponseText(response: unknown): string | null {
   return null
 }
 
+/**
+ * Map redacted guard messages back onto `generateContent` args.
+ *
+ * {@link contentToGuardFormat} emits exactly one guard message per content
+ * item (or one for a bare string), so indices align 1:1. Returns `null` for
+ * shapes we cannot rewrite safely (escalated to block in enforce mode).
+ */
+export function applyRedactionToArgs(args: unknown[], redacted: GuardMessage[]): unknown[] | null {
+  const contents = args[0]
+
+  if (typeof contents === "string") {
+    return redacted[0] ? [redacted[0].content, ...args.slice(1)] : null
+  }
+
+  if (!Array.isArray(contents)) return null
+
+  const newContents = contents.map((item, i) => {
+    const r = redacted[i]
+    if (!r) return item
+    if (typeof item === "string") return r.content
+    if (item && typeof item === "object" && "parts" in (item as object)) {
+      return { ...(item as Record<string, unknown>), parts: [{ text: r.content }] }
+    }
+    return r.content
+  })
+  return [newContents, ...args.slice(1)]
+}
+
 // ---------------------------------------------------------------------------
 // Apply / revert
 // ---------------------------------------------------------------------------
@@ -101,6 +129,7 @@ export function apply(): boolean {
       }
     },
     extractResponseText: (response) => extractResponseText(response),
+    applyRedaction: applyRedactionToArgs,
   })
 
   patched = true

@@ -20,7 +20,7 @@ let patched = false
 // Message conversion
 // ---------------------------------------------------------------------------
 
-function messagesToGuardFormat(params: Record<string, unknown>): GuardMessage[] {
+export function messagesToGuardFormat(params: Record<string, unknown>): GuardMessage[] {
   const result: GuardMessage[] = []
 
   if (params.messages && Array.isArray(params.messages)) {
@@ -49,7 +49,7 @@ function messagesToGuardFormat(params: Record<string, unknown>): GuardMessage[] 
   return result
 }
 
-function extractResponseText(response: unknown): string | null {
+export function extractResponseText(response: unknown): string | null {
   try {
     const r = response as Record<string, unknown>
     if (typeof r?.text === "string") return r.text
@@ -71,6 +71,49 @@ function extractResponseText(response: unknown): string | null {
   return null
 }
 
+/**
+ * Map redacted guard messages back onto Cohere chat args.
+ *
+ * Mirrors {@link messagesToGuardFormat}: V2 `messages` map 1:1 (falsy
+ * entries skipped), V1 maps `chatHistory` entries first and the trailing
+ * `message` last. Returns `null` when no known shape is present.
+ */
+export function applyRedactionToArgs(args: unknown[], redacted: GuardMessage[]): unknown[] | null {
+  const params = (args[0] ?? {}) as Record<string, unknown>
+
+  if (Array.isArray(params.messages)) {
+    let guardIdx = 0
+    const newMessages = params.messages.map((msg) => {
+      if (!msg) return msg
+      const r = redacted[guardIdx++]
+      if (r && typeof msg === "object") return { ...msg, content: r.content }
+      return msg
+    })
+    return [{ ...params, messages: newMessages }, ...args.slice(1)]
+  }
+
+  if (!Array.isArray(params.chatHistory) && params.message == null) return null
+
+  const newParams = { ...params }
+  let guardIdx = 0
+  if (Array.isArray(params.chatHistory)) {
+    newParams.chatHistory = params.chatHistory.map((msg) => {
+      if (!msg) return msg
+      const r = redacted[guardIdx++]
+      if (r && typeof msg === "object") {
+        const m = msg as Record<string, unknown>
+        // V1 history entries carry text in `message`; fall back to `content`.
+        return m.message != null ? { ...m, message: r.content } : { ...m, content: r.content }
+      }
+      return msg
+    })
+  }
+  if (params.message != null && redacted[guardIdx]) {
+    newParams.message = redacted[guardIdx].content
+  }
+  return [newParams, ...args.slice(1)]
+}
+
 // ---------------------------------------------------------------------------
 // Shared config
 // ---------------------------------------------------------------------------
@@ -85,6 +128,7 @@ const cohereConfig: PatchConfig = {
     }
   },
   extractResponseText: (response) => extractResponseText(response),
+  applyRedaction: applyRedactionToArgs,
 }
 
 // ---------------------------------------------------------------------------

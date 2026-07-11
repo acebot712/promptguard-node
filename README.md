@@ -298,6 +298,14 @@ console.log(`Total patterns: ${stats.total_patterns}`);
 > The proxy client (`PromptGuard`) talks to the `/api/v1/proxy` endpoints. If you set `baseUrl` / `PROMPTGUARD_BASE_URL` to `.../api/v1` (without `/proxy`), the SDK appends the `/proxy` suffix for you, so requests still land on the proxy.
 >
 > **Security:** the SDK sends your API key (and, in proxy mode, your prompt content) to whatever `PROMPTGUARD_BASE_URL` points at. Self-hosting is supported, so only point it at a host you trust.
+>
+> **Logging is process-global:** `logLevel` / `silent` set a single shared log level for the whole SDK. If several integrations or `init()` calls pass different values, the most recently constructed one wins. Use `setLogLevel()` directly for fine-grained control.
+
+## Limitations
+
+- **Streaming responses are not output-scanned.** With auto-instrumentation and `scanResponses: true`, streaming calls (`stream: true`, Bedrock `ConverseStreamCommand`, etc.) skip the output scan — the stream is consumed incrementally by your code and cannot be buffered without breaking stream semantics. Input scanning still applies. A `debug`-level log is emitted when the output scan is skipped.
+- **OpenAI `APIPromise` helpers are not preserved by auto-instrumentation.** Patched methods return a plain `Promise`, so `.withResponse()` / `.asResponse()` on `client.chat.completions.create(...)` are unavailable while `init()` is active. `await` the call and use the plain result instead.
+- **Proxy client streaming:** `pg.chat.completions.create({ stream: true })` is rejected with a clear error — streaming is not yet supported by the proxy client.
 
 ## Error Handling
 

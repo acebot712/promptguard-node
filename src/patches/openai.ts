@@ -8,6 +8,7 @@
  */
 
 import type { GuardMessage } from "../guard"
+import { logger } from "../logger"
 import { createPatchedMethod } from "./base"
 
 let originalCreate: ((...args: unknown[]) => unknown) | null = null
@@ -58,13 +59,20 @@ export function extractResponseContent(response: unknown): string | null {
   return null
 }
 
-function applyRedaction(messages: unknown[], redacted: GuardMessage[]): unknown[] {
-  return messages.map((msg, i) => {
-    if (i < redacted.length && typeof msg === "object" && msg !== null) {
-      return { ...msg, content: redacted[i].content }
-    }
+export function applyRedactionToArgs(args: unknown[], redacted: GuardMessage[]): unknown[] | null {
+  const params = (args[0] ?? {}) as Record<string, unknown>
+  const messages = params.messages as unknown[] | undefined
+  if (!Array.isArray(messages)) return null
+  // messagesToGuardFormat skips falsy entries, so track the guard index
+  // separately from the array position to keep redactions aligned.
+  let guardIdx = 0
+  const newMessages = messages.map((msg) => {
+    if (!msg) return msg
+    const r = redacted[guardIdx++]
+    if (r && typeof msg === "object") return { ...msg, content: r.content }
     return msg
   })
+  return [{ ...params, messages: newMessages }, ...args.slice(1)]
 }
 
 // ---------------------------------------------------------------------------
@@ -97,14 +105,15 @@ export function apply(): boolean {
       }
     },
     extractResponseText: (response) => extractResponseContent(response),
-    applyRedaction: (args, redactedMessages) => {
-      const params = (args[0] ?? {}) as Record<string, unknown>
-      const messages = params.messages as unknown[]
-      return [{ ...params, messages: applyRedaction(messages, redactedMessages) }, ...args.slice(1)]
-    },
+    applyRedaction: applyRedactionToArgs,
   })
 
   patched = true
+  // Logged once per process (apply() is idempotent via the `patched` flag).
+  logger.debug(
+    "openai patch active: APIPromise helpers (.withResponse()/.asResponse()) " +
+      "are not preserved on patched methods — see README 'Limitations'",
+  )
   return true
 }
 
