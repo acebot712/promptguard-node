@@ -3,8 +3,10 @@
  * `BedrockRuntimeClient` from `@aws-sdk/client-bedrock-runtime`.
  *
  * Unlike the other patches which target LLM-specific SDKs, this wraps
- * the AWS SDK v3 command pattern: `client.send(new InvokeModelCommand(...))`
- * and `client.send(new ConverseCommand(...))`.
+ * the AWS SDK v3 command pattern: `client.send(new InvokeModelCommand(...))`,
+ * `client.send(new ConverseCommand(...))`, and their streaming variants
+ * (`InvokeModelWithResponseStreamCommand`, `ConverseStreamCommand` — input
+ * scanned; output scanning skipped like all streams).
  *
  * Covers all Bedrock-hosted models: Claude, Titan, Llama, Mistral, Cohere,
  * and any model accessible via the Bedrock Runtime API.
@@ -16,7 +18,17 @@ import { createPatchedMethod } from "./base"
 let originalSend: ((...args: unknown[]) => unknown) | null = null
 let patched = false
 
-const BEDROCK_COMMANDS = new Set(["InvokeModelCommand", "ConverseCommand", "ConverseStreamCommand"])
+export const BEDROCK_COMMANDS = new Set([
+  "InvokeModelCommand",
+  "InvokeModelWithResponseStreamCommand",
+  "ConverseCommand",
+  "ConverseStreamCommand",
+])
+
+function commandNameOf(args: unknown[]): string {
+  const command = args[0] as Record<string, unknown> | undefined
+  return (command?.constructor as { name?: string } | undefined)?.name ?? ""
+}
 
 // ---------------------------------------------------------------------------
 // Message extraction (Bedrock-specific, handles multiple model formats)
@@ -102,6 +114,28 @@ export function extractMessagesFromBody(raw: unknown): GuardMessage[] {
   if (obj.prompt) return [{ role: "user", content: String(obj.prompt) }]
 
   return []
+}
+
+/**
+ * Extract guard messages + model from a Bedrock `send(command)` call.
+ *
+ * `InvokeModelCommand` and `InvokeModelWithResponseStreamCommand` share the
+ * same input shape (JSON `body`); the Converse commands carry `messages`
+ * directly on `input`. Output scanning is skipped for the streaming variants
+ * (see patches/base.ts `isStreaming`), but input scanning always applies.
+ */
+export function extractCommandMessages(args: unknown[]): {
+  messages: GuardMessage[]
+  model: string
+} {
+  const command = args[0] as Record<string, unknown>
+  const commandName = commandNameOf(args)
+  const input = (command?.input ?? {}) as Record<string, unknown>
+  const modelId = String(input.modelId ?? input.ModelId ?? "bedrock")
+  const messages = commandName.startsWith("InvokeModel")
+    ? extractMessagesFromBody(input.body)
+    : extractMessagesFromBody(input)
+  return { messages, model: modelId }
 }
 
 // ---------------------------------------------------------------------------
@@ -218,7 +252,10 @@ export function applyRedactionToArgs(args: unknown[], redacted: GuardMessage[]):
     const input = (command.input ?? {}) as Record<string, unknown>
 
     let newInput: Record<string, unknown> | null = null
-    if (commandName === "InvokeModelCommand") {
+    if (
+      commandName === "InvokeModelCommand" ||
+      commandName === "InvokeModelWithResponseStreamCommand"
+    ) {
       const newBody = redactInvokeModelBody(input.body, redacted)
       newInput = newBody === null ? null : { ...input, body: newBody }
     } else if (commandName === "ConverseCommand" || commandName === "ConverseStreamCommand") {
@@ -300,27 +337,10 @@ export function apply(): boolean {
 
   BedrockRuntimeClient.prototype.send = createPatchedMethod(original, {
     framework: "aws-bedrock",
-    shouldIntercept: (args) => {
-      const command = args[0] as Record<string, unknown>
-      const commandName = (command?.constructor as { name?: string })?.name ?? ""
-      return BEDROCK_COMMANDS.has(commandName)
-    },
-    extractMessages: (args) => {
-      const command = args[0] as Record<string, unknown>
-      const commandName = (command?.constructor as { name?: string })?.name ?? ""
-      const input = (command.input ?? {}) as Record<string, unknown>
-      const modelId = String(input.modelId ?? input.ModelId ?? "bedrock")
-      const messages =
-        commandName === "InvokeModelCommand"
-          ? extractMessagesFromBody(input.body)
-          : extractMessagesFromBody(input)
-      return { messages, model: modelId }
-    },
-    extractResponseText: (response, args) => {
-      const command = args[0] as Record<string, unknown>
-      const commandName = (command?.constructor as { name?: string })?.name ?? ""
-      return extractBedrockResponseText(response, commandName) || null
-    },
+    shouldIntercept: (args) => BEDROCK_COMMANDS.has(commandNameOf(args)),
+    extractMessages: extractCommandMessages,
+    extractResponseText: (response, args) =>
+      extractBedrockResponseText(response, commandNameOf(args)) || null,
     applyRedaction: applyRedactionToArgs,
   })
 
