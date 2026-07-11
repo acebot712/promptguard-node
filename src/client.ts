@@ -205,15 +205,26 @@ function serializeCompletionParams(params: Record<string, unknown>): Record<stri
 }
 
 /**
+ * Upper bound on a server-provided `Retry-After` delay. A hostile or
+ * misconfigured server must not be able to park the client for hours.
+ */
+const MAX_RETRY_AFTER_MS = 60_000
+
+/**
  * Parse a `Retry-After` header value (delta-seconds or HTTP-date) into a
- * delay in milliseconds, or `null` when absent/unparseable.
+ * delay in milliseconds, or `null` when absent/unparseable. Clamped to
+ * {@link MAX_RETRY_AFTER_MS}.
  */
 function parseRetryAfterMs(header: string | null | undefined): number | null {
   if (!header) return null
   const seconds = Number(header)
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS)
+  }
   const dateMs = Date.parse(header)
-  if (!Number.isNaN(dateMs)) return Math.max(0, dateMs - Date.now())
+  if (!Number.isNaN(dateMs)) {
+    return Math.min(Math.max(0, dateMs - Date.now()), MAX_RETRY_AFTER_MS)
+  }
   return null
 }
 
@@ -486,12 +497,32 @@ export class PromptGuard {
           )
         }
 
-        return response.json() as Promise<T>
+        try {
+          return (await response.json()) as T
+        } catch {
+          // A 2xx with an unparseable body may be transient (truncation), so
+          // it stays retryable — but it must never surface as a raw
+          // SyntaxError. Wrap it so the terminal failure is a typed error.
+          lastError = new PromptGuardError(
+            "invalid JSON in response body",
+            "INVALID_RESPONSE_BODY",
+            response.status,
+          )
+          if (attempt < this.config.maxRetries) {
+            const backoff = this.config.retryDelay * 2 ** attempt
+            await new Promise((r) => setTimeout(r, backoff + Math.random() * 0.25 * backoff))
+            continue
+          }
+          throw lastError
+        }
       } catch (err) {
         if (err instanceof PromptGuardError) throw err
         lastError = err as Error
         if (attempt < this.config.maxRetries) {
-          await new Promise((r) => setTimeout(r, this.config.retryDelay * 2 ** attempt))
+          // Mirror the status-code retry path: exponential backoff plus
+          // jitter so concurrent clients don't retry in lockstep.
+          const backoff = this.config.retryDelay * 2 ** attempt
+          await new Promise((r) => setTimeout(r, backoff + Math.random() * 0.25 * backoff))
         }
       }
     }
