@@ -44,7 +44,14 @@ describe("README TypeScript Support snippet", () => {
     const scan: SecurityScanResult = { blocked: false, decision: "allow" }
     const redact: RedactResult = { original: "a", redacted: "a", piiFound: [] }
     const guardMsg: GuardMessage = { role: "user", content: "hi" }
-    const ctx: GuardContext = { framework: "test" }
+    // camelCase request-side fields (README claims request options are camelCase).
+    const ctx: GuardContext = {
+      framework: "test",
+      chainName: "chain",
+      agentId: "agent",
+      sessionId: "sess",
+      toolCalls: [{ name: "lookup" }],
+    }
     const init: InitOptions = { apiKey: "pg_test", maxRetries: 2, retryDelay: 100 }
     const cfg: PromptGuardConfig = { apiKey: "pg_test", maxRetries: 1 }
     const rtReq: AutonomousRedTeamRequest = { budget: 10 }
@@ -132,6 +139,7 @@ describe("README TypeScript Support snippet", () => {
     expect(redact.piiFound).toEqual([])
     expect(guardMsg.role).toBe("user")
     expect(ctx.framework).toBe("test")
+    expect(ctx.chainName).toBe("chain")
     expect(init.maxRetries).toBe(2)
     expect(cfg.maxRetries).toBe(1)
     expect(rtReq.budget).toBe(10)

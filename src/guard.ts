@@ -27,6 +27,28 @@ export interface GuardMessage {
 
 export interface GuardContext {
   framework?: string
+  /** Chain/pipeline name (camelCase, preferred). */
+  chainName?: string
+  /** Agent identifier (camelCase, preferred). */
+  agentId?: string
+  /** Session identifier (camelCase, preferred). */
+  sessionId?: string
+  /** Tool-call records for this turn (camelCase, preferred). */
+  toolCalls?: Array<Record<string, unknown>>
+  metadata?: Record<string, unknown>
+  /** @deprecated snake_case alias for `chainName`; kept for back-compat. */
+  chain_name?: string
+  /** @deprecated snake_case alias for `agentId`; kept for back-compat. */
+  agent_id?: string
+  /** @deprecated snake_case alias for `sessionId`; kept for back-compat. */
+  session_id?: string
+  /** @deprecated snake_case alias for `toolCalls`; kept for back-compat. */
+  tool_calls?: Array<Record<string, unknown>>
+}
+
+/** Wire-format context (snake_case) sent in the request body. */
+export interface GuardContextWire {
+  framework?: string
   chain_name?: string
   agent_id?: string
   session_id?: string
@@ -34,11 +56,32 @@ export interface GuardContext {
   metadata?: Record<string, unknown>
 }
 
+/**
+ * Normalize a public {@link GuardContext} (camelCase, with deprecated
+ * snake_case aliases) into the snake_case wire shape. camelCase fields win
+ * over their deprecated snake_case aliases; only defined fields are emitted so
+ * the serialized body carries no camelCase keys and no explicit `undefined`s.
+ */
+export function serializeGuardContext(context: GuardContext): GuardContextWire {
+  const wire: GuardContextWire = {}
+  if (context.framework !== undefined) wire.framework = context.framework
+  const chainName = context.chainName ?? context.chain_name
+  if (chainName !== undefined) wire.chain_name = chainName
+  const agentId = context.agentId ?? context.agent_id
+  if (agentId !== undefined) wire.agent_id = agentId
+  const sessionId = context.sessionId ?? context.session_id
+  if (sessionId !== undefined) wire.session_id = sessionId
+  const toolCalls = context.toolCalls ?? context.tool_calls
+  if (toolCalls !== undefined) wire.tool_calls = toolCalls
+  if (context.metadata !== undefined) wire.metadata = context.metadata
+  return wire
+}
+
 export interface GuardRequestBody {
   messages: GuardMessage[]
   direction: "input" | "output"
   model?: string
-  context?: GuardContext
+  context?: GuardContextWire
 }
 
 /** Options-object form for {@link GuardClient.scan}. */
@@ -251,7 +294,10 @@ export class GuardClient {
 
     const payload: GuardRequestBody = { messages, direction }
     if (model) payload.model = model
-    if (context) payload.context = context
+    // Normalize camelCase context (and deprecated snake_case aliases) into the
+    // snake_case wire shape — the wire format stays snake_case regardless of
+    // which field names the caller used.
+    if (context) payload.context = serializeGuardContext(context)
     const serialized = JSON.stringify(payload)
 
     // Retry only transient failures (network errors, 429/5xx). Every terminal

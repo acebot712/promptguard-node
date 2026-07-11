@@ -358,8 +358,8 @@ export class PromptGuardCallbackHandler {
 
     return {
       framework: "langchain",
-      chain_name: chainInfo.chain_name as string | undefined,
-      session_id: runId,
+      chainName: chainInfo.chain_name as string | undefined,
+      sessionId: runId,
       metadata: {
         component,
         tags: tags ?? (chainInfo.tags as string[] | undefined),

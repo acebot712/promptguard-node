@@ -57,6 +57,7 @@ export {
   GuardClient,
   type GuardClientConfig,
   type GuardContext,
+  type GuardContextWire,
   GuardDecision,
   type GuardMessage,
   type GuardRequestBody,

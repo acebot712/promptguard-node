@@ -1,9 +1,11 @@
 import {
   GuardApiError,
   GuardClient,
+  type GuardContext,
   GuardDecision,
   PromptGuardBlockedError,
   safeErrorLabel,
+  serializeGuardContext,
 } from "../src/guard"
 import { PromptGuardCallbackHandler } from "../src/integrations/langchain"
 
@@ -305,6 +307,133 @@ describe("GuardClient", () => {
     await expect(client.scan([{ role: "user", content: "hello" }], "input")).rejects.toThrow(
       GuardApiError,
     )
+
+    global.fetch = originalFetch
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GuardContext camelCase -> snake_case wire normalization
+// ---------------------------------------------------------------------------
+
+describe("GuardContext serialization", () => {
+  test("camelCase fields normalize to the snake_case wire shape", () => {
+    const ctx: GuardContext = {
+      framework: "langchain",
+      chainName: "my-chain",
+      agentId: "agent-7",
+      sessionId: "sess-9",
+      toolCalls: [{ name: "lookup" }],
+      metadata: { component: "tool" },
+    }
+    expect(serializeGuardContext(ctx)).toEqual({
+      framework: "langchain",
+      chain_name: "my-chain",
+      agent_id: "agent-7",
+      session_id: "sess-9",
+      tool_calls: [{ name: "lookup" }],
+      metadata: { component: "tool" },
+    })
+  })
+
+  test("deprecated snake_case aliases still serialize to the same wire shape", () => {
+    const ctx: GuardContext = {
+      framework: "langchain",
+      chain_name: "my-chain",
+      agent_id: "agent-7",
+      session_id: "sess-9",
+      tool_calls: [{ name: "lookup" }],
+    }
+    expect(serializeGuardContext(ctx)).toEqual({
+      framework: "langchain",
+      chain_name: "my-chain",
+      agent_id: "agent-7",
+      session_id: "sess-9",
+      tool_calls: [{ name: "lookup" }],
+    })
+  })
+
+  test("camelCase wins over its deprecated snake_case alias", () => {
+    const ctx: GuardContext = {
+      chainName: "new",
+      chain_name: "old",
+      agentId: "new-agent",
+      agent_id: "old-agent",
+    }
+    expect(serializeGuardContext(ctx)).toEqual({
+      chain_name: "new",
+      agent_id: "new-agent",
+    })
+  })
+
+  test("omits undefined fields (no camelCase keys, no explicit undefined)", () => {
+    const wire = serializeGuardContext({ sessionId: "s" })
+    expect(wire).toEqual({ session_id: "s" })
+    expect(Object.keys(wire)).toEqual(["session_id"])
+  })
+
+  test("scan sends camelCase context as snake_case over the wire", async () => {
+    const originalFetch = global.fetch
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        decision: "allow",
+        event_id: "evt-ctx",
+        confidence: 0,
+        threats: [],
+        latency_ms: 1,
+      }),
+    })
+    global.fetch = fetchMock
+
+    const client = new GuardClient({ apiKey: "pg_test" })
+    await client.scan([{ role: "user", content: "hi" }], {
+      direction: "input",
+      context: { chainName: "c", agentId: "a", sessionId: "s", toolCalls: [{ name: "t" }] },
+    })
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body)
+    expect(body.context).toEqual({
+      chain_name: "c",
+      agent_id: "a",
+      session_id: "s",
+      tool_calls: [{ name: "t" }],
+    })
+    // The wire body must carry no camelCase keys.
+    expect(Object.keys(body.context)).not.toEqual(
+      expect.arrayContaining(["chainName", "agentId", "sessionId", "toolCalls"]),
+    )
+
+    global.fetch = originalFetch
+  })
+
+  test("scan sends deprecated snake_case context aliases unchanged over the wire", async () => {
+    const originalFetch = global.fetch
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        decision: "allow",
+        event_id: "evt-ctx2",
+        confidence: 0,
+        threats: [],
+        latency_ms: 1,
+      }),
+    })
+    global.fetch = fetchMock
+
+    const client = new GuardClient({ apiKey: "pg_test" })
+    await client.scan([{ role: "user", content: "hi" }], {
+      direction: "input",
+      context: { chain_name: "c", agent_id: "a", session_id: "s", tool_calls: [{ name: "t" }] },
+    })
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body)
+    expect(body.context).toEqual({
+      chain_name: "c",
+      agent_id: "a",
+      session_id: "s",
+      tool_calls: [{ name: "t" }],
+    })
 
     global.fetch = originalFetch
   })

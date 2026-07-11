@@ -401,7 +401,7 @@ import type {
 } from 'promptguard-sdk';
 ```
 
-> **Response fields are camelCase.** All SDK response objects use camelCase field names (e.g. `report.bypassRate`, `stats.totalPatterns`, `validation.riskScore`, `result.threatsDetected`) regardless of the snake_case wire format — consistent with `GuardDecision` and `SecurityScanResult`. Request options are camelCase too (`maxTokens`, `targetPreset`).
+> **Response fields are camelCase — with one deliberate exception.** The SDK's normalized response objects (the `security`, `redteam`, `agent`, `scrape`, and `guard` namespaces) use camelCase field names (e.g. `report.bypassRate`, `stats.totalPatterns`, `validation.riskScore`, `result.threatsDetected`) regardless of the snake_case wire format — consistent with `GuardDecision` and `SecurityScanResult`. The **OpenAI-compatible** responses (`chat.completions`, `completions`, `embeddings`, i.e. `ChatCompletionResponse`) are the exception: they intentionally preserve OpenAI's snake_case shape (`choices[].finish_reason`, `usage.prompt_tokens`, …) so they stay drop-in compatible with the `openai` client. Request options are camelCase throughout (`maxTokens`, `targetPreset`), including `GuardContext` (`chainName`, `agentId`, `sessionId`, `toolCalls`).
 
 ## Links
 
