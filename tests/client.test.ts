@@ -2,7 +2,7 @@
  * Tests for PromptGuard client -- namespace parity, new APIs, retry logic.
  */
 
-import { ensureProxySuffix } from "../src/client"
+import { buildRequestUrl, ensureProxySuffix } from "../src/client"
 import { PromptGuard, PromptGuardError } from "../src/index"
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -370,6 +370,18 @@ describe("Retry logic", () => {
     expect(global.fetch).toHaveBeenCalledTimes(2)
   })
 
+  test("does not retry deterministic non-network errors", async () => {
+    global.fetch = jest.fn().mockImplementation(() => {
+      // e.g. an invalid header value — undici throws before dispatch,
+      // without the "fetch failed" message or a cause.
+      throw new TypeError("invalid header value")
+    })
+    const pg = makeClient({ maxRetries: 3, retryDelay: 1 })
+
+    await expect(pg.request("POST", "/test")).rejects.toThrow("invalid header value")
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+  })
+
   test("retries on network error", async () => {
     let calls = 0
     global.fetch = jest.fn().mockImplementation(() => {
@@ -470,6 +482,30 @@ describe("ensureProxySuffix", () => {
     expect(ensureProxySuffix("https://api.promptguard.co/api/v1/myproxy")).toBe(
       "https://api.promptguard.co/api/v1/myproxy/proxy",
     )
+  })
+})
+
+describe("buildRequestUrl", () => {
+  test("appends the endpoint path to a plain base URL", () => {
+    expect(buildRequestUrl("https://api.promptguard.co/api/v1/proxy", "/chat/completions")).toBe(
+      "https://api.promptguard.co/api/v1/proxy/chat/completions",
+    )
+  })
+
+  test("keeps a query string after the endpoint path", () => {
+    expect(buildRequestUrl("https://x.com/api/v1/proxy?token=abc", "/chat/completions")).toBe(
+      "https://x.com/api/v1/proxy/chat/completions?token=abc",
+    )
+  })
+
+  test("keeps a fragment after the endpoint path", () => {
+    expect(buildRequestUrl("https://x.com/api/v1/proxy#frag", "/embeddings")).toBe(
+      "https://x.com/api/v1/proxy/embeddings#frag",
+    )
+  })
+
+  test("falls back to concatenation for unparseable base URLs", () => {
+    expect(buildRequestUrl("not a url", "/x")).toBe("not a url/x")
   })
 })
 

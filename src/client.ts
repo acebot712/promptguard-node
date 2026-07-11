@@ -256,6 +256,57 @@ export function ensureProxySuffix(baseUrl: string): string {
   return url.toString()
 }
 
+/**
+ * Whether a fetch-level failure is worth retrying.
+ *
+ * Undici surfaces network dispatch failures as `TypeError("fetch failed")`
+ * with a `cause`; aborts/timeouts carry the corresponding `name`. Everything
+ * else thrown before or during dispatch (circular-JSON serialization,
+ * invalid header values) is deterministic and retrying it just delays the
+ * real error.
+ */
+const RETRYABLE_ERRNO = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+])
+function isRetryableNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  if (err.name === "AbortError" || err.name === "TimeoutError") return true
+  // `Error.cause` needs lib es2022; this tsconfig targets earlier, so read it
+  // through a structural cast.
+  const cause = (err as Error & { cause?: unknown }).cause
+  const code =
+    (err as NodeJS.ErrnoException).code ?? (cause as NodeJS.ErrnoException | undefined)?.code
+  if (code !== undefined && RETRYABLE_ERRNO.has(code)) return true
+  return err instanceof TypeError && (cause !== undefined || err.message === "fetch failed")
+}
+
+/**
+ * Join an endpoint path onto the configured base URL.
+ *
+ * Plain string concatenation broke base URLs carrying a query string or
+ * fragment (which `ensureProxySuffix` deliberately preserves): the endpoint
+ * path landed inside the query/fragment value and every namespaced call
+ * routed to the wrong endpoint. Splice the path onto the URL's pathname so
+ * the query/fragment stay where they belong.
+ */
+export function buildRequestUrl(baseUrl: string, path: string): string {
+  let url: URL
+  try {
+    url = new URL(baseUrl)
+  } catch {
+    // Not a parseable absolute URL — keep the historical concat behavior.
+    return `${baseUrl}${path}`
+  }
+  const basePath = url.pathname.endsWith("/") ? url.pathname.slice(0, -1) : url.pathname
+  url.pathname = `${basePath}${path}`
+  return url.toString()
+}
+
 class ChatCompletions {
   private client: PromptGuard
   constructor(client: PromptGuard) {
@@ -517,6 +568,10 @@ export class PromptGuard {
         }
       } catch (err) {
         if (err instanceof PromptGuardError) throw err
+        // Deterministic pre-flight failures (circular JSON body, invalid
+        // header value) can never succeed on retry — surface them
+        // immediately instead of burning the full backoff schedule.
+        if (!isRetryableNetworkError(err)) throw err
         lastError = err as Error
         if (attempt < this.config.maxRetries) {
           // Mirror the status-code retry path: exponential backoff plus
