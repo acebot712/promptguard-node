@@ -9,7 +9,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 
-import { GuardDecision, PromptGuardBlockedError } from "../src/guard"
+import { GuardApiError, GuardDecision, PromptGuardBlockedError } from "../src/guard"
 import { messagesToGuardFormat as anthropicMessages } from "../src/patches/anthropic"
 import { contentToGuardFormat } from "../src/patches/google"
 import { messagesToGuardFormat } from "../src/patches/openai"
@@ -25,6 +25,14 @@ const contract = JSON.parse(fs.readFileSync(CONTRACT_PATH, "utf-8"))
 describe("Contract: GuardDecision", () => {
   for (const c of contract.guard_decision.cases) {
     test(c.name, () => {
+      if (c.expect_error) {
+        // Malformed decisions must raise the SDK's API-error type instead
+        // of silently defaulting to allow.
+        expect(c.expect_error).toBe("GuardApiError")
+        expect(() => new GuardDecision(c.input)).toThrow(GuardApiError)
+        return
+      }
+
       const d = new GuardDecision(c.input)
 
       expect(d.allowed).toBe(c.expect.allowed)

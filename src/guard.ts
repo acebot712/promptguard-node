@@ -61,6 +61,8 @@ export interface GuardResponseBody {
 // GuardDecision - immutable result object
 // ---------------------------------------------------------------------------
 
+const VALID_DECISIONS = new Set(["allow", "block", "redact"])
+
 export class GuardDecision {
   readonly decision: string
   readonly eventId: string
@@ -70,8 +72,19 @@ export class GuardDecision {
   readonly threats: ThreatDetail[]
   readonly latencyMs: number
 
+  /**
+   * @throws {GuardApiError} when `data.decision` is missing or not one of
+   *   `allow` / `block` / `redact`. A malformed body must never silently
+   *   default to "allow" — surfacing it as a {@link GuardApiError} lets the
+   *   caller's explicit `failOpen` policy govern instead.
+   */
   constructor(data: Partial<GuardResponseBody>) {
-    this.decision = data.decision ?? "allow"
+    if (typeof data?.decision !== "string" || !VALID_DECISIONS.has(data.decision)) {
+      throw new GuardApiError(
+        `Guard API returned invalid decision: ${String(JSON.stringify(data?.decision)).slice(0, 50)}`,
+      )
+    }
+    this.decision = data.decision
     this.eventId = data.event_id ?? ""
     this.confidence = data.confidence ?? 0
     this.threatType = data.threat_type
@@ -239,7 +252,14 @@ export class GuardClient {
       )
     }
 
-    const body = (await resp.json()) as GuardResponseBody
+    // A 2xx with a malformed body must not escape as a raw SyntaxError —
+    // wrap it in GuardApiError so the caller's failOpen policy governs.
+    let body: GuardResponseBody
+    try {
+      body = (await resp.json()) as GuardResponseBody
+    } catch {
+      throw new GuardApiError("invalid JSON in Guard response", resp.status)
+    }
     return new GuardDecision(body)
   }
 }

@@ -56,14 +56,27 @@ describe("GuardDecision", () => {
     expect(d.redactedMessages?.[0].content).toBe("My SSN is [REDACTED]")
   })
 
-  test("defaults for missing fields", () => {
-    const d = new GuardDecision({})
+  test("defaults for missing optional fields", () => {
+    const d = new GuardDecision({ decision: "allow" })
     expect(d.decision).toBe("allow")
     expect(d.eventId).toBe("")
     expect(d.confidence).toBe(0)
     expect(d.threatType).toBeUndefined()
     expect(d.threats).toEqual([])
     expect(d.latencyMs).toBe(0)
+  })
+
+  test("empty body throws instead of defaulting to allow", () => {
+    // A malformed/empty body must never silently become an "allow" —
+    // the caller's failOpen policy decides what happens.
+    expect(() => new GuardDecision({})).toThrow(GuardApiError)
+  })
+
+  test("invalid decision value throws GuardApiError", () => {
+    expect(() => new GuardDecision({ decision: "yolo" as unknown as "allow" })).toThrow(
+      GuardApiError,
+    )
+    expect(() => new GuardDecision({ decision: 42 as unknown as "allow" })).toThrow(GuardApiError)
   })
 })
 
@@ -196,7 +209,8 @@ describe("GuardClient", () => {
     const headers = (client as unknown as { headers: () => Record<string, string> }).headers()
     expect(headers["X-API-Key"]).toBe("pg_my_key")
     expect(headers["X-PromptGuard-SDK"]).toBe("node-auto")
-    expect(headers["X-PromptGuard-Version"]).toBe("1.8.0")
+    // src/version.ts is generated from package.json (prebuild); they must agree.
+    expect(headers["X-PromptGuard-Version"]).toBe(require("../package.json").version)
     expect(headers["Content-Type"]).toBe("application/json")
   })
 
@@ -248,6 +262,44 @@ describe("GuardClient", () => {
     expect(result).toBeInstanceOf(GuardDecision)
     expect(result.allowed).toBe(true)
     expect(result.eventId).toBe("evt-ok")
+
+    global.fetch = originalFetch
+  })
+
+  test("scan throws GuardApiError when a 2xx body is malformed JSON", async () => {
+    const originalFetch = global.fetch
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("Unexpected token < in JSON")
+      },
+    })
+
+    const client = new GuardClient({ apiKey: "pg_test" })
+    const err = await client
+      .scan([{ role: "user", content: "hello" }], "input")
+      .then(() => null)
+      .catch((e) => e)
+    expect(err).toBeInstanceOf(GuardApiError)
+    expect((err as GuardApiError).statusCode).toBe(200)
+    expect((err as GuardApiError).message).toContain("invalid JSON")
+
+    global.fetch = originalFetch
+  })
+
+  test("scan throws GuardApiError when a 2xx body has an invalid decision", async () => {
+    const originalFetch = global.fetch
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ totally: "unexpected" }),
+    })
+
+    const client = new GuardClient({ apiKey: "pg_test" })
+    await expect(client.scan([{ role: "user", content: "hello" }], "input")).rejects.toThrow(
+      GuardApiError,
+    )
 
     global.fetch = originalFetch
   })
