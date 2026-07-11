@@ -6,29 +6,36 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "default": "./dist/index.js"
     },
     "./auto": {
+      "types": "./dist/auto.d.ts",
       "require": "./dist/auto.js",
-      "types": "./dist/auto.d.ts"
+      "default": "./dist/auto.js"
     },
     "./guard": {
+      "types": "./dist/guard.d.ts",
       "require": "./dist/guard.js",
-      "types": "./dist/guard.d.ts"
+      "default": "./dist/guard.js"
     },
     "./integrations/langchain": {
+      "types": "./dist/integrations/langchain.d.ts",
       "require": "./dist/integrations/langchain.js",
-      "types": "./dist/integrations/langchain.d.ts"
+      "default": "./dist/integrations/langchain.js"
     },
     "./integrations/vercel-ai": {
+      "types": "./dist/integrations/vercel-ai.d.ts",
       "require": "./dist/integrations/vercel-ai.js",
-      "types": "./dist/integrations/vercel-ai.d.ts"
+      "default": "./dist/integrations/vercel-ai.js"
     }
   },
   "scripts": {
+    "prebuild": "node scripts/generate-version.mjs",
     "build": "tsc",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test:pack": "node scripts/pack-smoke-test.mjs",
     "lint": "tsc --noEmit && npx biome check .",
     "format": "npx biome format --write .",
     "format:check": "npx biome format .",
