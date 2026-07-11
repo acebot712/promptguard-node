@@ -85,6 +85,20 @@ function sanitizeComment(text: string): string {
   return text.replace(/\*\//g, "")
 }
 
+/**
+ * The spec version is interpolated into the generated file's block-comment
+ * header, so it gets the same treatment as names and descriptions: strip
+ * the block-comment terminator, then require a plain semver-ish shape.
+ * Anything else (e.g. a version crafted to break out of the comment and
+ * inject code) falls back to "unknown".
+ */
+const VERSION_RE = /^[0-9A-Za-z.+-]+$/
+
+function sanitizeVersion(version: unknown): string {
+  const cleaned = sanitizeComment(String(version ?? "unknown"))
+  return VERSION_RE.test(cleaned) ? cleaned : "unknown"
+}
+
 function mapType(prop: SchemaProperty): string {
   if (prop.$ref) return resolveRef(prop.$ref)
   if (prop.anyOf) {
@@ -161,7 +175,7 @@ function main() {
 
   const spec: OpenAPISpec = JSON.parse(fs.readFileSync(specPath, "utf-8"))
   const schemas = spec.components?.schemas ?? {}
-  const version = spec.info?.version ?? "unknown"
+  const version = sanitizeVersion(spec.info?.version)
 
   const header = [
     "/**",
