@@ -298,6 +298,78 @@ describe("Retry logic", () => {
     timeoutSpy.mockRestore()
   })
 
+  test("clamps Retry-After to 60 seconds", async () => {
+    // Fire timers immediately so the clamped 60s delay doesn't slow the
+    // suite, while still capturing the scheduled delay values.
+    const timeoutSpy = jest.spyOn(global, "setTimeout").mockImplementation(((cb: () => void) => {
+      cb()
+      return 0 as unknown as NodeJS.Timeout
+    }) as never)
+    let calls = 0
+    global.fetch = jest.fn().mockImplementation(() => {
+      calls++
+      if (calls === 1) {
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          // A hostile/misconfigured server asking for a 1-hour delay.
+          headers: { get: (name: string) => (name === "retry-after" ? "3600" : null) },
+          json: () => Promise.resolve({}),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+    })
+    try {
+      const pg = makeClient({ maxRetries: 1, retryDelay: 1 })
+      const result = await pg.request("POST", "/test")
+      expect(result).toEqual({ ok: true })
+      const delays = timeoutSpy.mock.calls.map((c) => c[1] as number)
+      const retryDelay = Math.max(...delays)
+      // Clamped to 60s (+ up to 25% of the 1ms base backoff jitter).
+      expect(retryDelay).toBeGreaterThanOrEqual(60_000)
+      expect(retryDelay).toBeLessThanOrEqual(60_000 + 1)
+    } finally {
+      timeoutSpy.mockRestore()
+    }
+  })
+
+  test("terminal 2xx JSON-parse failure surfaces as PromptGuardError, not SyntaxError", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError("Unexpected token < in JSON")),
+    })
+    const pg = makeClient({ maxRetries: 0 })
+
+    const err = await pg
+      .request("POST", "/test")
+      .then(() => null)
+      .catch((e) => e)
+    expect(err).toBeInstanceOf(PromptGuardError)
+    expect((err as PromptGuardError).code).toBe("INVALID_RESPONSE_BODY")
+    expect((err as PromptGuardError).statusCode).toBe(200)
+  })
+
+  test("2xx JSON-parse failure is retried before failing", async () => {
+    let calls = 0
+    global.fetch = jest.fn().mockImplementation(() => {
+      calls++
+      if (calls === 1) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.reject(new SyntaxError("truncated body")),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+    })
+    const pg = makeClient({ maxRetries: 1, retryDelay: 1 })
+
+    const result = await pg.request("POST", "/test")
+    expect(result).toEqual({ ok: true })
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+  })
+
   test("retries on network error", async () => {
     let calls = 0
     global.fetch = jest.fn().mockImplementation(() => {

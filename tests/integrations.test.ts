@@ -135,6 +135,90 @@ describe("PromptGuardCallbackHandler", () => {
     )
   })
 
+  test("handleChatModelStart flattens structured content-part arrays", async () => {
+    // Regression: String() on a content-part array yields "[object Object]"
+    // and the real text was never scanned.
+    const handler = new PromptGuardCallbackHandler({ apiKey: "pg_test" })
+    const guard = (handler as unknown as { guard: { scan: jest.Mock } }).guard
+    guard.scan = jest.fn().mockResolvedValue(
+      new GuardDecision({
+        decision: "allow",
+        event_id: "e4b",
+        confidence: 0,
+        threats: [],
+        latency_ms: 1,
+      }),
+    )
+
+    await handler.handleChatModelStart(
+      {},
+      [
+        [
+          {
+            type: "human",
+            content: [
+              { type: "text", text: "secret one" },
+              { type: "image_url", image_url: { url: "https://..." } },
+              { type: "text", text: "secret two" },
+            ],
+          },
+        ],
+      ],
+      "run-4b",
+    )
+
+    expect(guard.scan).toHaveBeenCalledWith(
+      [{ role: "user", content: "secret one\nsecret two" }],
+      "input",
+      expect.anything(),
+      expect.anything(),
+    )
+  })
+
+  test("redact decision in enforce mode escalates to block (callbacks cannot rewrite inputs)", async () => {
+    const errorSpy = jest.spyOn(console, "error").mockImplementation()
+    const handler = new PromptGuardCallbackHandler({ apiKey: "pg_test", mode: "enforce" })
+    const guard = (handler as unknown as { guard: { scan: jest.Mock } }).guard
+    guard.scan = jest.fn().mockResolvedValue(
+      new GuardDecision({
+        decision: "redact",
+        event_id: "e-redact",
+        confidence: 0.8,
+        redacted_messages: [{ role: "user", content: "[REDACTED]" }],
+        threats: [],
+        latency_ms: 1,
+      }),
+    )
+
+    await expect(handler.handleLLMStart({}, ["SSN 123-45-6789"], "run-r1")).rejects.toThrow(
+      PromptGuardBlockedError,
+    )
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("escalating to block"))
+    errorSpy.mockRestore()
+  })
+
+  test("redact decision in monitor mode warns accurately and proceeds", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation()
+    const handler = new PromptGuardCallbackHandler({ apiKey: "pg_test", mode: "monitor" })
+    const guard = (handler as unknown as { guard: { scan: jest.Mock } }).guard
+    guard.scan = jest.fn().mockResolvedValue(
+      new GuardDecision({
+        decision: "redact",
+        event_id: "e-redact2",
+        confidence: 0.8,
+        threats: [],
+        latency_ms: 1,
+      }),
+    )
+
+    // Must not throw, and must not claim content was redacted (it wasn't).
+    await handler.handleLLMStart({}, ["SSN 123-45-6789"], "run-r2")
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("would redact: content passed through unredacted"),
+    )
+    warnSpy.mockRestore()
+  })
+
   test("handleToolStart scans tool input", async () => {
     const handler = new PromptGuardCallbackHandler({ apiKey: "pg_test" })
     const guard = (handler as unknown as { guard: { scan: jest.Mock } }).guard
@@ -208,6 +292,15 @@ describe("PromptGuardCallbackHandler", () => {
       undefined,
       expect.anything(),
     )
+  })
+
+  test("scanResponses defaults to false (unified with init() and vercel-ai)", async () => {
+    const handler = new PromptGuardCallbackHandler({ apiKey: "pg_test" })
+    const guard = (handler as unknown as { guard: { scan: jest.Mock } }).guard
+    guard.scan = jest.fn()
+
+    await handler.handleLLMEnd({ generations: [[{ text: "output" }]] }, "run-7")
+    expect(guard.scan).not.toHaveBeenCalled()
   })
 })
 
@@ -448,6 +541,7 @@ describe("promptGuardMiddleware redaction", () => {
   })
 
   test("monitor mode leaves the prompt unredacted", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation()
     global.fetch = mockGuardFetch({
       decision: "redact",
       event_id: "e-r3",
@@ -461,6 +555,45 @@ describe("promptGuardMiddleware redaction", () => {
     const params = { prompt: [{ role: "user", content: "secret" }] }
     const result = await mw.transformParams({ params })
     expect(result).toBe(params)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("would redact"))
+    warnSpy.mockRestore()
+  })
+
+  test("enforce + redact decision without redacted messages escalates to block", async () => {
+    // Regression: a redact decision with no redacted_messages used to fall
+    // through and send the unredacted prompt.
+    const errorSpy = jest.spyOn(console, "error").mockImplementation()
+    global.fetch = mockGuardFetch({
+      decision: "redact",
+      event_id: "e-r4",
+      confidence: 0.8,
+      threats: [],
+      latency_ms: 1,
+    })
+
+    const mw = promptGuardMiddleware({ apiKey: "pg_test", mode: "enforce" })
+    await expect(
+      mw.transformParams({ params: { prompt: [{ role: "user", content: "secret" }] } }),
+    ).rejects.toThrow(PromptGuardBlockedError)
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("escalating to block"))
+    errorSpy.mockRestore()
+  })
+
+  test("enforce + redact decision with empty redacted messages escalates to block", async () => {
+    jest.spyOn(console, "error").mockImplementation()
+    global.fetch = mockGuardFetch({
+      decision: "redact",
+      event_id: "e-r5",
+      confidence: 0.8,
+      redacted_messages: [],
+      threats: [],
+      latency_ms: 1,
+    })
+
+    const mw = promptGuardMiddleware({ apiKey: "pg_test", mode: "enforce" })
+    await expect(
+      mw.transformParams({ params: { prompt: [{ role: "user", content: "secret" }] } }),
+    ).rejects.toThrow(PromptGuardBlockedError)
   })
 })
 
@@ -542,5 +675,67 @@ describe("promptGuardMiddleware wrapGenerate", () => {
     // biome-ignore lint/style/noNonNullAssertion: defined when scanResponses=true
     const result = await mw.wrapGenerate!({ doGenerate, params: {} })
     expect(result).toBe(generated)
+  })
+
+  test("v5 (LanguageModelV2) content-array results are scanned", async () => {
+    // Regression: v5 results carry `content: [...]` parts and no top-level
+    // `text`, so response scanning used to no-op entirely.
+    global.fetch = mockGuardFetch({
+      decision: "block",
+      event_id: "e-v5",
+      confidence: 0.9,
+      threat_type: "pii",
+      threats: [],
+      latency_ms: 1,
+    })
+    const v5Result = {
+      content: [
+        { type: "text", text: "leaked SSN 123-45-6789" },
+        { type: "tool-call", toolCallId: "t1", toolName: "search", input: { q: "secret" } },
+      ],
+    }
+    const mw = middleware({ mode: "enforce" })
+    await expect(
+      // biome-ignore lint/style/noNonNullAssertion: defined when scanResponses=true
+      mw.wrapGenerate!({ doGenerate: () => Promise.resolve(v5Result), params: {} }),
+    ).rejects.toThrow(PromptGuardBlockedError)
+
+    // Both the text part and the tool-call args must be in the scanned body.
+    const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body as string)
+    expect(body.messages[0].content).toContain("leaked SSN 123-45-6789")
+    expect(body.messages[0].content).toContain('{"q":"secret"}')
+  })
+
+  test("all tool-call args are scanned, not just the first", async () => {
+    global.fetch = mockGuardFetch({
+      decision: "allow",
+      event_id: "e-tc",
+      confidence: 0,
+      threats: [],
+      latency_ms: 1,
+    })
+    const result = {
+      toolCalls: [
+        { toolName: "a", args: '{"first":true}' },
+        { toolName: "b", args: { second: true } },
+      ],
+    }
+    const mw = middleware()
+    // biome-ignore lint/style/noNonNullAssertion: defined when scanResponses=true
+    await mw.wrapGenerate!({ doGenerate: () => Promise.resolve(result), params: {} })
+
+    const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body as string)
+    expect(body.messages[0].content).toContain('{"first":true}')
+    expect(body.messages[0].content).toContain('{"second":true}')
+  })
+
+  test("results with nothing scannable are returned without a Guard call", async () => {
+    global.fetch = jest.fn()
+    const empty = { finishReason: "stop" }
+    const mw = middleware()
+    // biome-ignore lint/style/noNonNullAssertion: defined when scanResponses=true
+    const result = await mw.wrapGenerate!({ doGenerate: () => Promise.resolve(empty), params: {} })
+    expect(result).toBe(empty)
+    expect(global.fetch).not.toHaveBeenCalled()
   })
 })

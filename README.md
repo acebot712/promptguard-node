@@ -25,6 +25,8 @@ Get a free API key at [app.promptguard.co](https://app.promptguard.co).
 > **PromptGuard fails open by default** — if the Guard API is unavailable, calls proceed *unscanned* so your app stays up. Set `failOpen: false` to block (fail closed) on a Guard outage instead.
 
 > **Module format:** the package currently ships **CommonJS** (`require`) builds. It works in ESM projects via Node's CJS interop (`import { init } from 'promptguard-sdk'` transpiles to a `require`), and in plain CommonJS via `const { init } = require('promptguard-sdk')`.
+>
+> **Running a native-ESM app?** Auto-instrumentation (`init()`) may not cover your LLM calls — see [Limitations: ESM apps](#limitations) before relying on enforce mode.
 
 ## Option 1: Auto-Instrumentation (Recommended)
 
@@ -56,13 +58,21 @@ Auto-instrumentation patches the `create` / `generateContent` / `chat` / `send` 
 
 | SDK | npm Package | What Gets Patched |
 |-----|------------|-------------------|
-| OpenAI | `openai` | `chat.completions.create` |
+| OpenAI | `openai` | `chat.completions.create`, `responses.create` (string and message-item `input` forms) |
 | Anthropic | `@anthropic-ai/sdk` | `messages.create` |
 | Google Generative AI | `@google/generative-ai` | `generateContent` |
 | Cohere | `cohere-ai` | `Client.chat` / `ClientV2.chat` |
-| AWS Bedrock | `@aws-sdk/client-bedrock-runtime` | `BedrockRuntimeClient.send` (InvokeModel, Converse) |
+| AWS Bedrock | `@aws-sdk/client-bedrock-runtime` | `BedrockRuntimeClient.send` (InvokeModel, InvokeModelWithResponseStream, Converse, ConverseStream) |
 
 Any framework built on these SDKs is automatically covered: **LangChain.js**, **Vercel AI SDK**, **AutoGen**, **Semantic Kernel**, and more.
+
+> Patches attach to the modules resolved via CommonJS `require()`. If `init()` finds **no** patchable SDK it logs a warning (nothing would be scanned). You can also verify at runtime with `getAppliedPatches()`:
+> ```typescript
+> import { init, getAppliedPatches } from 'promptguard-sdk';
+> init({ apiKey: 'pg_live_xxx' });
+> console.log(getAppliedPatches()); // e.g. ['openai', 'anthropic']
+> ```
+> Native-ESM apps: see [Limitations: ESM apps](#limitations).
 
 ### Modes
 
@@ -159,6 +169,10 @@ const result = await chain.invoke(
 
 The callback handler provides rich context to PromptGuard - chain names, tool calls, agent steps - for more precise threat detection.
 
+> **Redact decisions block in enforce mode:** LangChain callbacks observe calls but cannot rewrite the inputs of the in-flight LLM call, so a `redact` decision cannot be honored — in enforce mode it is escalated to a block (`PromptGuardBlockedError`) rather than silently sending the content the Guard API asked to redact. Use auto-instrumentation or explicit `GuardClient.scan()` calls if you need actual redaction.
+>
+> `scanResponses` defaults to `false` (consistent with `init()` and the Vercel AI middleware) — pass `scanResponses: true` to opt in to output scanning.
+
 ### Vercel AI SDK
 
 ```typescript
@@ -225,7 +239,9 @@ const pg = new PromptGuard({
 });
 ```
 
-Retries use exponential backoff starting from `retryDelay`. Only transient errors (network timeouts, 5xx responses) are retried; client errors (4xx) fail immediately.
+Retries use exponential backoff starting from `retryDelay`, with jitter so concurrent clients don't retry in lockstep. A server-provided `Retry-After` header is honored but clamped to 60 seconds. Only transient errors (network timeouts, 429/5xx responses) are retried; client errors (4xx) fail immediately.
+
+> **Idempotency caveat:** all requests — including `POST`s — are retried on transient failure. If a request reached the server but the response was lost, the retry re-submits it. Chat/completion/scan calls are safe to re-submit, but each attempt may bill separately; set `maxRetries: 0` if you need strict at-most-once semantics.
 
 ## Embeddings
 
@@ -302,6 +318,21 @@ console.log(`Total patterns: ${stats.total_patterns}`);
 > **Logging is process-global:** `logLevel` / `silent` set a single shared log level for the whole SDK. If several integrations or `init()` calls pass different values, the most recently constructed one wins. Use `setLogLevel()` directly for fine-grained control.
 
 ## Limitations
+
+### ESM apps (auto-instrumentation)
+
+Auto-instrumentation (`init()`) patches the provider modules that Node resolves via **CommonJS `require()`**. If your application runs as **native ESM** (`"type": "module"` in package.json, or `.mjs` files) and a provider ships separate ESM builds, the module instances your code `import`s can be *different objects* from the ones the SDK patched — the **dual-package hazard**. In that case your LLM calls bypass the patches entirely and **enforce mode silently protects nothing**.
+
+What to do:
+
+- **Verify at runtime** with `getAppliedPatches()` after `init()` — and note that a patch being listed proves the CJS build was patched, not that your ESM imports go through it. `init()` also logs a warning when it applies zero patches.
+- **Prefer the ESM-safe APIs**, which don't rely on module patching:
+  - LangChain: `PromptGuardCallbackHandler` (`promptguard-sdk/integrations/langchain`)
+  - Vercel AI SDK: `promptGuardMiddleware` (`promptguard-sdk/integrations/vercel-ai`)
+  - Any framework: explicit `GuardClient.scan()` calls around your LLM invocations
+- Transpiled-to-CJS TypeScript apps (the common `tsc`/`ts-node` default) are **not** affected — their `import`s compile to `require()` and hit the patched modules.
+
+### Other limitations
 
 - **Streaming responses are not output-scanned.** With auto-instrumentation and `scanResponses: true`, streaming calls (`stream: true`, Bedrock `ConverseStreamCommand`, etc.) skip the output scan — the stream is consumed incrementally by your code and cannot be buffered without breaking stream semantics. Input scanning still applies. A `debug`-level log is emitted when the output scan is skipped.
 - **OpenAI `APIPromise` helpers are not preserved by auto-instrumentation.** Patched methods return a plain `Promise`, so `.withResponse()` / `.asResponse()` on `client.chat.completions.create(...)` are unavailable while `init()` is active. `await` the call and use the plain result instead.

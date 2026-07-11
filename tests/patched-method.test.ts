@@ -204,6 +204,63 @@ describe("createPatchedMethod redaction", () => {
     expect(errorSpy).toHaveBeenCalled()
   })
 
+  test("redact + enforce with missing redactedMessages: escalates to block", async () => {
+    // Regression: a redact decision whose body carried no redacted_messages
+    // used to fall through and send the unredacted content.
+    const errorSpy = jest.spyOn(console, "error").mockImplementation()
+    const noMessagesRedact = new GuardDecision({
+      decision: "redact",
+      event_id: "e-redact-empty",
+      confidence: 0.8,
+      threat_type: "pii",
+      threats: [],
+      latency_ms: 1,
+    })
+    const { original, patched } = setup({
+      mode: "enforce",
+      scanImpl: jest.fn().mockResolvedValue(noMessagesRedact),
+    })
+    await expect(patched({ messages: userMessages })).rejects.toThrow(PromptGuardBlockedError)
+    expect(original).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("escalating to block"))
+  })
+
+  test("redact + enforce with empty redactedMessages array: escalates to block", async () => {
+    const emptyRedact = new GuardDecision({
+      decision: "redact",
+      event_id: "e-redact-empty2",
+      confidence: 0.8,
+      redacted_messages: [],
+      threats: [],
+      latency_ms: 1,
+    })
+    jest.spyOn(console, "error").mockImplementation()
+    const { original, patched } = setup({
+      mode: "enforce",
+      scanImpl: jest.fn().mockResolvedValue(emptyRedact),
+    })
+    await expect(patched({ messages: userMessages })).rejects.toThrow(PromptGuardBlockedError)
+    expect(original).not.toHaveBeenCalled()
+  })
+
+  test("redact + monitor with missing redactedMessages: warns and proceeds", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation()
+    const noMessagesRedact = new GuardDecision({
+      decision: "redact",
+      event_id: "e-redact-empty3",
+      confidence: 0.8,
+      threats: [],
+      latency_ms: 1,
+    })
+    const { original, patched } = setup({
+      mode: "monitor",
+      scanImpl: jest.fn().mockResolvedValue(noMessagesRedact),
+    })
+    await patched({ messages: userMessages })
+    expect(original).toHaveBeenCalledWith({ messages: userMessages })
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("would redact"))
+  })
+
   test("redact + monitor: warns and passes original args through", async () => {
     const warnSpy = jest.spyOn(console, "warn").mockImplementation()
     const { original, patched } = setup({
