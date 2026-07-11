@@ -6,6 +6,7 @@
  * the decision (allow / block / redact).
  */
 
+import { buildRequestUrl } from "./client"
 import { DEFAULT_BASE_URL } from "./resolve"
 import { SDK_VERSION } from "./version"
 
@@ -176,8 +177,9 @@ export class GuardClient {
 
   constructor(config: GuardClientConfig) {
     this.apiKey = config.apiKey
-    const base = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "")
-    this.guardUrl = `${base}/guard`
+    // Splice /guard onto the URL path (not string concat) so a base URL
+    // carrying a query string or fragment keeps it after the endpoint path.
+    this.guardUrl = buildRequestUrl(config.baseUrl ?? DEFAULT_BASE_URL, "/guard")
     this.timeout = config.timeout ?? 10_000
   }
 

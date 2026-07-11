@@ -169,11 +169,15 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
               { framework: "vercel-ai-sdk" },
             )
 
-            if (respDecision.blocked) {
+            if (respDecision.blocked || respDecision.redacted) {
+              // Generated output cannot be rewritten after the fact, so an
+              // output-direction redact decision is enforced as a block.
               if (mode === "enforce") {
                 throw new PromptGuardBlockedError(respDecision)
               }
-              logger.warn(`[monitor] would block response: ${respDecision.threatType}`)
+              logger.warn(
+                `[monitor] would ${respDecision.redacted ? "redact" : "block"} response: ${respDecision.threatType}`,
+              )
             }
           } catch (err) {
             if (err instanceof PromptGuardBlockedError) throw err
@@ -189,6 +193,19 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
           }
 
           return result
+        }
+      : undefined,
+
+    /**
+     * wrapStream - streamed outputs are NOT scanned (chunks are consumed
+     * incrementally by the caller and cannot be buffered without breaking
+     * stream semantics). Present only to log the skip so the gap is never
+     * silent; input scanning via transformParams still applies.
+     */
+    wrapStream: scanResponses
+      ? async ({ doStream }: { doStream: () => Promise<unknown> }) => {
+          logger.debug("output scanning skipped for streaming response (framework=vercel-ai-sdk)")
+          return doStream()
         }
       : undefined,
   }

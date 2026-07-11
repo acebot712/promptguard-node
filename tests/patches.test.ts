@@ -669,6 +669,27 @@ describe("Bedrock InvokeModelWithResponseStreamCommand", () => {
     expect(BEDROCK_COMMANDS.has("InvokeModelWithResponseStreamCommand")).toBe(true)
   })
 
+  test("extracts Cohere Command R message + chat_history bodies", () => {
+    const body = JSON.stringify({
+      message: "What is my SSN?",
+      chat_history: [
+        { role: "USER", message: "hi" },
+        { role: "CHATBOT", message: "hello" },
+      ],
+    })
+    expect(bedrockExtractMessages(body)).toEqual([
+      { role: "user", content: "hi" },
+      { role: "chatbot", content: "hello" },
+      { role: "user", content: "What is my SSN?" },
+    ])
+  })
+
+  test("extracts Cohere Command R message without chat_history", () => {
+    expect(bedrockExtractMessages(JSON.stringify({ message: "hi" }))).toEqual([
+      { role: "user", content: "hi" },
+    ])
+  })
+
   test("extractCommandMessages extracts from the JSON body like InvokeModelCommand", () => {
     const cmd = new InvokeModelWithResponseStreamCommand({
       modelId: "anthropic.claude-3",

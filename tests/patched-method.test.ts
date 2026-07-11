@@ -359,6 +359,27 @@ describe("createPatchedMethod output scanning", () => {
     expect(result).toEqual({ text: "model output" })
   })
 
+  test("redact output + enforce: throws (output cannot be rewritten)", async () => {
+    const scanImpl = jest
+      .fn()
+      .mockResolvedValueOnce(allowDecision())
+      .mockResolvedValueOnce(redactDecision())
+    const { patched } = setup({ mode: "enforce", scanResponses: true, scanImpl })
+    await expect(patched({ messages: userMessages })).rejects.toThrow(PromptGuardBlockedError)
+  })
+
+  test("redact output + monitor: warns and returns result", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation()
+    const scanImpl = jest
+      .fn()
+      .mockResolvedValueOnce(allowDecision())
+      .mockResolvedValueOnce(redactDecision())
+    const { patched } = setup({ mode: "monitor", scanResponses: true, scanImpl })
+    const result = await patched({ messages: userMessages })
+    expect(result).toEqual({ text: "model output" })
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("would redact"))
+  })
+
   test("output-scan guard outage + failOpen=true: returns result", async () => {
     const scanImpl = jest
       .fn()

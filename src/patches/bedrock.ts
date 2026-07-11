@@ -110,6 +110,21 @@ export function extractMessagesFromBody(raw: unknown): GuardMessage[] {
     return result
   }
 
+  // Cohere Command R/R+ invoke-model bodies: { message, chat_history: [...] }.
+  if (typeof obj.message === "string") {
+    for (const turn of Array.isArray(obj.chat_history) ? obj.chat_history : []) {
+      if (typeof turn === "object" && turn !== null) {
+        const t = turn as Record<string, unknown>
+        result.push({
+          role: String(t.role ?? "user").toLowerCase(),
+          content: String(t.message ?? t.content ?? ""),
+        })
+      }
+    }
+    result.push({ role: "user", content: obj.message })
+    return result
+  }
+
   if (obj.inputText) return [{ role: "user", content: String(obj.inputText) }]
   if (obj.prompt) return [{ role: "user", content: String(obj.prompt) }]
 

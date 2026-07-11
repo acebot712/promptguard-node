@@ -76,6 +76,15 @@ export function createPatchedMethod(
 
     const { messages, model } = config.extractMessages(args, this)
 
+    if (!messages.length) {
+      // An intercepted call whose body we could not extract anything from
+      // proceeds unscanned — say so instead of failing silently, since a
+      // provider body shape we don't recognize is an enforcement gap.
+      logger.debug(
+        `[${config.framework}] intercepted call yielded no scannable messages; proceeding unscanned`,
+      )
+    }
+
     if (messages.length) {
       let decision = null
 
@@ -158,8 +167,16 @@ export function createPatchedMethod(
             "output",
             model,
           )
-          if (respDecision.blocked && getMode() === "enforce") {
-            throw new PromptGuardBlockedError(respDecision)
+          if (respDecision.blocked || respDecision.redacted) {
+            // A response cannot be rewritten after the fact, so an
+            // output-direction redact decision is enforced as a block
+            // (mirrors the framework integrations).
+            if (getMode() === "enforce") {
+              throw new PromptGuardBlockedError(respDecision)
+            }
+            logger.warn(
+              `[monitor] would ${respDecision.redacted ? "redact" : "block"} response: ${respDecision.threatType}`,
+            )
           }
         }
       } catch (err: unknown) {

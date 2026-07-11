@@ -382,6 +382,20 @@ describe("Retry logic", () => {
     expect(global.fetch).toHaveBeenCalledTimes(1)
   })
 
+  test("request URL keeps a base-URL query string after the endpoint path", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ok: true }),
+    })
+    const pg = new PromptGuard({ apiKey: "pg_test", baseUrl: "https://x.com/api/v1?token=abc" })
+    await pg.request("POST", "/chat/completions")
+    expect(global.fetch).toHaveBeenCalledWith(
+      "https://x.com/api/v1/proxy/chat/completions?token=abc",
+      expect.anything(),
+    )
+  })
+
   test("retries on network error", async () => {
     let calls = 0
     global.fetch = jest.fn().mockImplementation(() => {

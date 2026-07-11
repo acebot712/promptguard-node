@@ -408,7 +408,9 @@ class Agent {
     })
   }
   async stats(agentId: string): Promise<Record<string, unknown>> {
-    return this.client.request("GET", `/agent/${agentId}/stats`)
+    // Encode so an id containing "/", "?", "#", or ".." cannot reroute the
+    // authenticated request to a different endpoint.
+    return this.client.request("GET", `/agent/${encodeURIComponent(agentId)}/stats`)
   }
 }
 
@@ -423,9 +425,13 @@ class RedTeam {
     return this.client.request("GET", `${this.base}/tests`)
   }
   async runTest(testName: string, targetPreset = "default"): Promise<RedTeamTestResult> {
-    return this.client.request<RedTeamTestResult>("POST", `${this.base}/test/${testName}`, {
-      target_preset: targetPreset,
-    })
+    return this.client.request<RedTeamTestResult>(
+      "POST",
+      `${this.base}/test/${encodeURIComponent(testName)}`,
+      {
+        target_preset: targetPreset,
+      },
+    )
   }
   async runAll(targetPreset = "default"): Promise<RedTeamSummary> {
     return this.client.request<RedTeamSummary>("POST", `${this.base}/test-all`, {
@@ -491,7 +497,7 @@ export class PromptGuard {
   }
 
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const url = `${this.config.baseUrl}${path}`
+    const url = buildRequestUrl(this.config.baseUrl, path)
     let lastError: Error | undefined
 
     for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
