@@ -261,6 +261,64 @@ describe("createPatchedMethod redaction", () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("would redact"))
   })
 
+  test("redact + enforce with FEWER redactedMessages than scanned messages: escalates to block", async () => {
+    // Regression: a redact decision whose redacted_messages list was shorter
+    // than the scanned guard messages used to be applied anyway, silently
+    // keeping the original content for the unmatched trailing messages.
+    const errorSpy = jest.spyOn(console, "error").mockImplementation()
+    const partialRedact = new GuardDecision({
+      decision: "redact",
+      event_id: "e-redact-partial",
+      confidence: 0.8,
+      threat_type: "pii",
+      redacted_messages: [{ role: "user", content: "[REDACTED]" }],
+      threats: [],
+      latency_ms: 1,
+    })
+    const applyRedaction = jest.fn(baseConfig.applyRedaction)
+    const { original, patched } = setup({
+      mode: "enforce",
+      scanImpl: jest.fn().mockResolvedValue(partialRedact),
+      config: { applyRedaction },
+    })
+    const twoMessages = [
+      { role: "user", content: "SSN 123-45-6789" },
+      { role: "user", content: "card 4111 1111 1111 1111" },
+    ]
+    await expect(patched({ messages: twoMessages })).rejects.toThrow(PromptGuardBlockedError)
+    expect(original).not.toHaveBeenCalled()
+    // The mapper must never see a partial list — it is escalated centrally.
+    expect(applyRedaction).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("1 redacted messages for 2 scanned"),
+    )
+  })
+
+  test("redact + monitor with FEWER redactedMessages than scanned messages: warns and proceeds", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation()
+    const partialRedact = new GuardDecision({
+      decision: "redact",
+      event_id: "e-redact-partial2",
+      confidence: 0.8,
+      redacted_messages: [{ role: "user", content: "[REDACTED]" }],
+      threats: [],
+      latency_ms: 1,
+    })
+    const { original, patched } = setup({
+      mode: "monitor",
+      scanImpl: jest.fn().mockResolvedValue(partialRedact),
+    })
+    const twoMessages = [
+      { role: "user", content: "one" },
+      { role: "user", content: "two" },
+    ]
+    await patched({ messages: twoMessages })
+    expect(original).toHaveBeenCalledWith({ messages: twoMessages })
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("partial: 1 redacted messages for 2 scanned"),
+    )
+  })
+
   test("redact + monitor: warns and passes original args through", async () => {
     const warnSpy = jest.spyOn(console, "warn").mockImplementation()
     const { original, patched } = setup({

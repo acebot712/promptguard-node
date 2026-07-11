@@ -595,6 +595,60 @@ describe("promptGuardMiddleware redaction", () => {
       mw.transformParams({ params: { prompt: [{ role: "user", content: "secret" }] } }),
     ).rejects.toThrow(PromptGuardBlockedError)
   })
+
+  test("enforce + FEWER redacted messages than scanned escalates to block", async () => {
+    // Regression: a partial redacted_messages list used to be applied
+    // anyway, silently keeping the original content for the unmatched
+    // trailing prompt messages.
+    const errorSpy = jest.spyOn(console, "error").mockImplementation()
+    global.fetch = mockGuardFetch({
+      decision: "redact",
+      event_id: "e-r6",
+      confidence: 0.8,
+      redacted_messages: [{ role: "user", content: "[REDACTED]" }],
+      threats: [],
+      latency_ms: 1,
+    })
+
+    const mw = promptGuardMiddleware({ apiKey: "pg_test", mode: "enforce" })
+    const prompt = [
+      { role: "user", content: "SSN 123-45-6789" },
+      { role: "user", content: "card 4111 1111 1111 1111" },
+    ]
+    await expect(mw.transformParams({ params: { prompt } })).rejects.toThrow(
+      PromptGuardBlockedError,
+    )
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("1 redacted messages for 2 scanned"),
+    )
+    errorSpy.mockRestore()
+  })
+
+  test("monitor + FEWER redacted messages than scanned warns about the partial list", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation()
+    global.fetch = mockGuardFetch({
+      decision: "redact",
+      event_id: "e-r7",
+      confidence: 0.8,
+      redacted_messages: [{ role: "user", content: "[REDACTED]" }],
+      threats: [],
+      latency_ms: 1,
+    })
+
+    const mw = promptGuardMiddleware({ apiKey: "pg_test", mode: "monitor" })
+    const params = {
+      prompt: [
+        { role: "user", content: "one" },
+        { role: "user", content: "two" },
+      ],
+    }
+    const result = await mw.transformParams({ params })
+    expect(result).toBe(params)
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("partial: 1 redacted messages for 2 scanned"),
+    )
+    warnSpy.mockRestore()
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -97,28 +97,43 @@ export function createPatchedMethod(
       }
 
       if (decision?.redacted) {
+        const redactedMessages = decision.redactedMessages ?? []
+        // A redactedMessages list SHORTER than the scanned guard messages
+        // would leave the unmatched trailing messages unredacted — the
+        // per-SDK mappers silently keep original content for guard indices
+        // past the end of the list. Treat a partial list like an
+        // unredactable shape.
+        const isPartial = redactedMessages.length < messages.length
         if (getMode() === "enforce") {
-          // A redact decision with missing/empty redactedMessages cannot be
-          // honored either — treat it exactly like an unredactable shape.
+          // A redact decision with missing/empty/partial redactedMessages
+          // cannot be honored either — treat it exactly like an
+          // unredactable shape.
           const redactedArgs =
-            decision.redactedMessages?.length && config.applyRedaction
-              ? config.applyRedaction(args, decision.redactedMessages)
+            redactedMessages.length && !isPartial && config.applyRedaction
+              ? config.applyRedaction(args, redactedMessages)
               : null
           if (redactedArgs === null) {
             // Redaction cannot be applied to this call shape (or the Guard
-            // API returned no redacted messages). Sending the unredacted
-            // content would silently leak what the Guard API asked us to
-            // redact, so escalate to a block in enforce mode.
+            // API returned no/partial redacted messages). Sending the
+            // unredacted content would silently leak what the Guard API
+            // asked us to redact, so escalate to a block in enforce mode.
             logger.error(
-              `redact decision could not be applied for ${config.framework}; ` +
-                `escalating to block (event=${decision.eventId})`,
+              `redact decision could not be applied for ${config.framework}` +
+                (isPartial
+                  ? ` (${redactedMessages.length} redacted messages for ${messages.length} scanned)`
+                  : "") +
+                `; escalating to block (event=${decision.eventId})`,
             )
             throw new PromptGuardBlockedError(decision)
           }
           args = redactedArgs
         } else {
           logger.warn(
-            `[monitor] would redact: content passed through unredacted (event=${decision.eventId})`,
+            `[monitor] would redact: content passed through unredacted` +
+              (isPartial
+                ? ` (partial: ${redactedMessages.length} redacted messages for ${messages.length} scanned)`
+                : "") +
+              ` (event=${decision.eventId})`,
           )
         }
       }

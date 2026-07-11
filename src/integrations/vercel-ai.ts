@@ -97,24 +97,38 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
         }
 
         if (decision.redacted) {
+          const redactedMessages = decision.redactedMessages ?? []
+          // A redactedMessages list SHORTER than the scanned guard messages
+          // would leave the unmatched trailing messages unredacted (the
+          // index map below only covers the returned entries), so a partial
+          // list cannot be honored either.
+          const isPartial = redactedMessages.length < guardMessages.length
           if (mode === "enforce") {
-            if (!decision.redactedMessages?.length) {
-              // A redact decision without redacted messages cannot be
-              // honored; proceeding would silently send the content the
-              // Guard API asked us to redact — escalate to a block.
+            if (!redactedMessages.length || isPartial) {
+              // A redact decision without (or with too few) redacted
+              // messages cannot be honored; proceeding would silently send
+              // the content the Guard API asked us to redact — escalate to
+              // a block.
               logger.error(
-                `redact decision returned no redacted messages; ` +
-                  `escalating to block (event=${decision.eventId})`,
+                `redact decision returned ` +
+                  (isPartial && redactedMessages.length
+                    ? `${redactedMessages.length} redacted messages for ${guardMessages.length} scanned`
+                    : "no redacted messages") +
+                  `; escalating to block (event=${decision.eventId})`,
               )
               throw new PromptGuardBlockedError(decision)
             }
             return {
               ...params,
-              prompt: applyRedactionToPrompt(prompt, decision.redactedMessages, indices),
+              prompt: applyRedactionToPrompt(prompt, redactedMessages, indices),
             }
           }
           logger.warn(
-            `[monitor] would redact: content passed through unredacted (event=${decision.eventId})`,
+            `[monitor] would redact: content passed through unredacted` +
+              (isPartial
+                ? ` (partial: ${redactedMessages.length} redacted messages for ${guardMessages.length} scanned)`
+                : "") +
+              ` (event=${decision.eventId})`,
           )
         }
       } catch (err) {
