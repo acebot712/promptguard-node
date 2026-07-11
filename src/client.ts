@@ -31,8 +31,8 @@ interface ChatCompletionRequest {
   model: string
   messages: Message[]
   temperature?: number
+  /** Maximum tokens to generate. Serialized to the wire as `max_tokens`. */
   maxTokens?: number
-  stream?: boolean
   [key: string]: unknown
 }
 
@@ -184,6 +184,40 @@ const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504])
 const PROXY_BASE_URL = `${DEFAULT_BASE_URL}/proxy`
 
 /**
+ * Serialize camelCase SDK params to the wire format the server expects
+ * (`maxTokens` → `max_tokens`), and reject options we cannot honor.
+ *
+ * Streaming is rejected explicitly: `request()` always parses the response
+ * as a single JSON body, so `stream: true` would hang or retry the JSON
+ * parse failure instead of streaming.
+ */
+function serializeCompletionParams(params: Record<string, unknown>): Record<string, unknown> {
+  if (params.stream === true) {
+    throw new PromptGuardError(
+      "streaming not yet supported by the PromptGuard proxy client — remove `stream: true`",
+      "streaming_not_supported",
+      400,
+    )
+  }
+  const { maxTokens, ...rest } = params
+  if (maxTokens !== undefined) rest.max_tokens = maxTokens
+  return rest
+}
+
+/**
+ * Parse a `Retry-After` header value (delta-seconds or HTTP-date) into a
+ * delay in milliseconds, or `null` when absent/unparseable.
+ */
+function parseRetryAfterMs(header: string | null | undefined): number | null {
+  if (!header) return null
+  const seconds = Number(header)
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000
+  const dateMs = Date.parse(header)
+  if (!Number.isNaN(dateMs)) return Math.max(0, dateMs - Date.now())
+  return null
+}
+
+/**
  * Ensure the proxy base URL's path ends with `/proxy`.
  *
  * The proxy endpoints live under `/api/v1/proxy`. Users frequently set
@@ -217,7 +251,11 @@ class ChatCompletions {
     this.client = client
   }
   async create(params: ChatCompletionRequest): Promise<ChatCompletionResponse> {
-    return this.client.request<ChatCompletionResponse>("POST", "/chat/completions", params)
+    return this.client.request<ChatCompletionResponse>(
+      "POST",
+      "/chat/completions",
+      serializeCompletionParams(params),
+    )
   }
 }
 
@@ -234,7 +272,11 @@ class Completions {
     this.client = client
   }
   async create(params: CompletionRequest): Promise<CompletionResponse> {
-    return this.client.request<CompletionResponse>("POST", "/completions", params)
+    return this.client.request<CompletionResponse>(
+      "POST",
+      "/completions",
+      serializeCompletionParams(params),
+    )
   }
 }
 
@@ -405,7 +447,15 @@ export class PromptGuard {
         })
 
         if (RETRYABLE_STATUS_CODES.has(response.status) && attempt < this.config.maxRetries) {
-          await new Promise((r) => setTimeout(r, this.config.retryDelay * 2 ** attempt))
+          // Consume the body so undici can release the connection back to
+          // the keep-alive pool instead of leaking it per retried attempt.
+          await response.body?.cancel().catch(() => {})
+          // Honor Retry-After when the server provides one; otherwise use
+          // exponential backoff. Add small jitter to avoid thundering herds.
+          const backoff = this.config.retryDelay * 2 ** attempt
+          const retryAfterMs = parseRetryAfterMs(response.headers?.get?.("retry-after"))
+          const delay = retryAfterMs ?? backoff
+          await new Promise((r) => setTimeout(r, delay + Math.random() * 0.25 * backoff))
           continue
         }
 
