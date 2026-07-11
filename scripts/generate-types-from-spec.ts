@@ -42,8 +42,27 @@ interface OpenAPISpec {
   }
 }
 
+/**
+ * Schema and property names are interpolated verbatim into the generated
+ * TypeScript, so they must be plain identifiers — anything else could break
+ * out of the declaration and inject code (enum values and descriptions are
+ * escaped/sanitized; names must be equally constrained). Fail generation
+ * loudly rather than emit a compromised file.
+ */
+const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+
+function assertValidIdentifier(name: string, kind: string): void {
+  if (!IDENTIFIER_RE.test(name)) {
+    throw new Error(
+      `${kind} ${JSON.stringify(name)} is not a valid TypeScript identifier — ` +
+        "refusing to generate (possible spec injection)",
+    )
+  }
+}
+
 function resolveRef(ref: string): string {
   const name = ref.split("/").pop() ?? ref
+  assertValidIdentifier(name, "Referenced schema name")
   return name
 }
 
@@ -94,6 +113,7 @@ function mapType(prop: SchemaProperty): string {
 }
 
 function generateInterface(name: string, schema: Schema): string {
+  assertValidIdentifier(name, "Schema name")
   const lines: string[] = []
 
   if (schema.description) {
@@ -118,6 +138,7 @@ function generateInterface(name: string, schema: Schema): string {
 
   lines.push(`export interface ${name} {`)
   for (const [propName, prop] of Object.entries(schema.properties)) {
+    assertValidIdentifier(propName, "Property name")
     const optional = required.has(propName) ? "" : "?"
     const tsType = mapType(prop)
     if (prop.description) {
