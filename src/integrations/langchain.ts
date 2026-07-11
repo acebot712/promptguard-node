@@ -18,6 +18,7 @@
  */
 
 import {
+  GuardApiError,
   GuardClient,
   type GuardClientConfig,
   type GuardContext,
@@ -37,7 +38,11 @@ export interface PromptGuardCallbackOptions extends GuardClientConfig {
   mode?: "enforce" | "monitor"
   scanResponses?: boolean
   failOpen?: boolean
-  /** SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress logs. */
+  /**
+   * SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress logs.
+   * NOTE: this sets the **process-global** SDK log level (shared with `init()`
+   * and other integrations); the most recently constructed instance wins.
+   */
   logLevel?: LogLevel
   /** Convenience shorthand for `logLevel: "silent"`. */
   silent?: boolean
@@ -49,6 +54,27 @@ export interface PromptGuardCallbackOptions extends GuardClientConfig {
 
 export class PromptGuardCallbackHandler {
   readonly name = "promptguard"
+
+  /**
+   * Tell LangChain's callback manager to re-throw errors from this handler.
+   *
+   * `@langchain/core` wraps every handler invocation in `consumeCallback`,
+   * which catches handler errors and merely `console.error`s them unless
+   * `handler.raiseError` is true. Without this, a
+   * {@link PromptGuardBlockedError} thrown in enforce mode would be
+   * swallowed and the LLM call would proceed — i.e. enforce mode would not
+   * actually block.
+   */
+  readonly raiseError = true
+
+  /**
+   * Tell LangChain to await this handler before continuing.
+   *
+   * `consumeCallback(fn, wait)` only awaits the handler when `wait`
+   * (`handler.awaitHandlers`) is true; otherwise the scan runs in the
+   * background and cannot abort the LLM call even with `raiseError` set.
+   */
+  readonly awaitHandlers = true
 
   private readonly guard: GuardClient
   private readonly mode: "enforce" | "monitor"
@@ -223,7 +249,12 @@ export class PromptGuardCallbackHandler {
     try {
       return await this.guard.scan(messages, direction, model, context)
     } catch (err) {
-      if (!this.failOpen) throw new Error("Guard API unavailable")
+      // Only a Guard API outage is eligible for fail-open (mirrors
+      // patches/base.ts). Any other error is a real bug and must surface.
+      if (!(err instanceof GuardApiError)) throw err
+      // Failing closed rethrows the original typed error so callers keep
+      // the status code and cause instead of an anonymous Error.
+      if (!this.failOpen) throw err
       logger.warn(
         `Guard API unavailable, allowing ${direction} unscanned (failOpen=true): ${safeErrorLabel(
           err,

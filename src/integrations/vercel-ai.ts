@@ -20,6 +20,7 @@
  */
 
 import {
+  GuardApiError,
   GuardClient,
   type GuardClientConfig,
   type GuardMessage,
@@ -37,7 +38,11 @@ export interface PromptGuardMiddlewareOptions extends GuardClientConfig {
   mode?: "enforce" | "monitor"
   scanResponses?: boolean
   failOpen?: boolean
-  /** SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress logs. */
+  /**
+   * SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress logs.
+   * NOTE: this sets the **process-global** SDK log level (shared with `init()`
+   * and other integrations); the most recently constructed instance wins.
+   */
   logLevel?: LogLevel
   /** Convenience shorthand for `logLevel: "silent"`. */
   silent?: boolean
@@ -73,7 +78,7 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
       const prompt = params?.prompt
       if (!prompt) return params
 
-      const guardMessages = vercelPromptToGuardMessages(prompt)
+      const { messages: guardMessages, indices } = vercelPromptToGuardMessages(prompt)
       if (!guardMessages.length) return params
 
       try {
@@ -94,11 +99,14 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
         if (decision.redacted && decision.redactedMessages && mode === "enforce") {
           return {
             ...params,
-            prompt: applyRedactionToPrompt(prompt, decision.redactedMessages),
+            prompt: applyRedactionToPrompt(prompt, decision.redactedMessages, indices),
           }
         }
       } catch (err) {
         if (err instanceof PromptGuardBlockedError) throw err
+        // Only a Guard API outage is eligible for fail-open (mirrors
+        // patches/base.ts); rethrow the original error when failing closed.
+        if (!(err instanceof GuardApiError)) throw err
         if (!failOpen) throw err
         logger.warn(
           `Guard API unavailable, allowing input unscanned (failOpen=true): ${safeErrorLabel(err)}`,
@@ -142,6 +150,9 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
             }
           } catch (err) {
             if (err instanceof PromptGuardBlockedError) throw err
+            // Only a Guard API outage is eligible for fail-open; rethrow
+            // the original error when failing closed.
+            if (!(err instanceof GuardApiError)) throw err
             if (!failOpen) throw err
             logger.warn(
               `Guard API unavailable, response left unscanned (failOpen=true): ${safeErrorLabel(
@@ -160,20 +171,33 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function vercelPromptToGuardMessages(prompt: unknown): GuardMessage[] {
+/**
+ * Convert a Vercel AI SDK prompt to guard messages.
+ *
+ * Messages without scannable text (e.g. image-only content) are skipped, so
+ * `indices[k]` records the original prompt index each guard message came
+ * from — required to map redactions back without misalignment.
+ */
+function vercelPromptToGuardMessages(prompt: unknown): {
+  messages: GuardMessage[]
+  indices: number[]
+} {
   if (typeof prompt === "string") {
-    return [{ role: "user", content: prompt }]
+    return { messages: [{ role: "user", content: prompt }], indices: [0] }
   }
 
-  if (!Array.isArray(prompt)) return []
+  if (!Array.isArray(prompt)) return { messages: [], indices: [] }
 
-  const result: GuardMessage[] = []
-  for (const msg of prompt) {
+  const messages: GuardMessage[] = []
+  const indices: number[] = []
+  for (let i = 0; i < prompt.length; i++) {
+    const msg = prompt[i]
     if (!msg) continue
     const role = String(msg.role ?? "user")
 
     if (typeof msg.content === "string") {
-      result.push({ role, content: msg.content })
+      messages.push({ role, content: msg.content })
+      indices.push(i)
     } else if (Array.isArray(msg.content)) {
       const textParts: string[] = []
       for (const part of msg.content) {
@@ -181,25 +205,45 @@ function vercelPromptToGuardMessages(prompt: unknown): GuardMessage[] {
         else if (part?.type === "text") textParts.push(part.text ?? "")
       }
       if (textParts.length) {
-        result.push({ role, content: textParts.join("\n") })
+        messages.push({ role, content: textParts.join("\n") })
+        indices.push(i)
       }
     }
   }
 
-  return result
+  return { messages, indices }
 }
 
-function applyRedactionToPrompt(prompt: unknown, redacted: GuardMessage[]): unknown {
-  if (typeof prompt === "string" && redacted[0]) {
-    return redacted[0].content
+/**
+ * Map redacted guard messages back onto the original prompt using the
+ * original indices recorded during extraction. Structured (array) content
+ * is rebuilt as `[{ type: "text", text }]` rather than a bare string so the
+ * message still conforms to the AI SDK's content shape.
+ */
+function applyRedactionToPrompt(
+  prompt: unknown,
+  redacted: GuardMessage[],
+  indices: number[],
+): unknown {
+  if (typeof prompt === "string") {
+    return redacted[0] ? redacted[0].content : prompt
   }
 
   if (!Array.isArray(prompt)) return prompt
 
+  // Map original prompt index -> redacted guard message.
+  const redactionByIndex = new Map<number, GuardMessage>()
+  for (let k = 0; k < redacted.length && k < indices.length; k++) {
+    redactionByIndex.set(indices[k], redacted[k])
+  }
+
   return (prompt as unknown[]).map((msg: unknown, i: number) => {
-    if (i < redacted.length && msg && typeof msg === "object") {
-      return { ...msg, content: redacted[i].content }
-    }
-    return msg
+    const r = redactionByIndex.get(i)
+    if (!r || !msg || typeof msg !== "object") return msg
+    const original = msg as Record<string, unknown>
+    const content = Array.isArray(original.content)
+      ? [{ type: "text", text: r.content }]
+      : r.content
+    return { ...original, content }
   })
 }
