@@ -50,28 +50,28 @@ describe("README TypeScript Support snippet", () => {
     const rtReq: AutonomousRedTeamRequest = { budget: 10 }
     const rtRep: AutonomousRedTeamReport = {
       grade: "A",
-      bypass_rate: 0,
-      total_attempts: 0,
-      bypasses_found: 0,
+      bypassRate: 0,
+      totalAttempts: 0,
+      bypassesFound: 0,
       bypasses: [],
       recommendations: [],
     }
     const stats: IntelligenceStats = {
-      total_patterns: 0,
-      by_category: {},
-      by_severity: {},
-      recent_discoveries: 0,
+      totalPatterns: 0,
+      byCategory: {},
+      bySeverity: {},
+      recentDiscoveries: 0,
     }
     const tool: ToolValidationResult = {
       allowed: true,
-      risk_score: 0,
-      risk_level: "low",
+      riskScore: 0,
+      riskLevel: "low",
       reason: "",
       warnings: [],
-      blocked_reasons: [],
+      blockedReasons: [],
     }
     const rtTest: RedTeamTestResult = {
-      test_name: "t",
+      testName: "t",
       prompt: "p",
       decision: "allow",
       reason: "",
@@ -80,17 +80,17 @@ describe("README TypeScript Support snippet", () => {
       details: {},
     }
     const rtSummary: RedTeamSummary = {
-      total_tests: 0,
+      totalTests: 0,
       blocked: 0,
       allowed: 0,
-      block_rate: 0,
+      blockRate: 0,
       results: [],
     }
     const scrape: ScrapeResult = {
       url: "https://x",
       status: "safe",
       content: "",
-      threats_detected: [],
+      threatsDetected: [],
     }
     const embReq: EmbeddingRequest = { model: "m", input: "x" }
     const embResp: EmbeddingResponse = { object: "list", data: [], model: "m" }
@@ -136,10 +136,10 @@ describe("README TypeScript Support snippet", () => {
     expect(cfg.maxRetries).toBe(1)
     expect(rtReq.budget).toBe(10)
     expect(rtRep.grade).toBe("A")
-    expect(stats.total_patterns).toBe(0)
+    expect(stats.totalPatterns).toBe(0)
     expect(tool.allowed).toBe(true)
     expect(rtTest.decision).toBe("allow")
-    expect(rtSummary.total_tests).toBe(0)
+    expect(rtSummary.totalTests).toBe(0)
     expect(scrape.status).toBe("safe")
     expect(embReq.model).toBe("m")
     expect(embResp.model).toBe("m")

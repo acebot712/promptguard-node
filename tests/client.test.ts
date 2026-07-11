@@ -346,7 +346,7 @@ describe("Retry logic", () => {
       .then(() => null)
       .catch((e) => e)
     expect(err).toBeInstanceOf(PromptGuardError)
-    expect((err as PromptGuardError).code).toBe("INVALID_RESPONSE_BODY")
+    expect((err as PromptGuardError).code).toBe("invalid_response_body")
     expect((err as PromptGuardError).statusCode).toBe(200)
   })
 

@@ -31,6 +31,22 @@
       "default": "./dist/integrations/vercel-ai.js"
     }
   },
+  "typesVersions": {
+    "*": {
+      "auto": [
+        "dist/auto.d.ts"
+      ],
+      "guard": [
+        "dist/guard.d.ts"
+      ],
+      "integrations/langchain": [
+        "dist/integrations/langchain.d.ts"
+      ],
+      "integrations/vercel-ai": [
+        "dist/integrations/vercel-ai.d.ts"
+      ]
+    }
+  },
   "scripts": {
     "prebuild": "node scripts/generate-version.mjs",
     "build": "tsc",

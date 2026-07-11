@@ -315,11 +315,11 @@ const report = await pg.redteam.runAutonomous({
   budget: 200,
   targetPreset: 'support_bot:strict', // snake_case `target_preset` also accepted
 });
-console.log(`Grade: ${report.grade}, Bypass rate: ${(report.bypass_rate * 100).toFixed(0)}%`);
+console.log(`Grade: ${report.grade}, Bypass rate: ${(report.bypassRate * 100).toFixed(0)}%`);
 
 // Get Attack Intelligence stats
 const stats = await pg.redteam.intelligenceStats();
-console.log(`Total patterns: ${stats.total_patterns}`);
+console.log(`Total patterns: ${stats.totalPatterns}`);
 ```
 
 ## Configuration
@@ -400,6 +400,8 @@ import type {
   IntelligenceStats,
 } from 'promptguard-sdk';
 ```
+
+> **Response fields are camelCase.** All SDK response objects use camelCase field names (e.g. `report.bypassRate`, `stats.totalPatterns`, `validation.riskScore`, `result.threatsDetected`) regardless of the snake_case wire format — consistent with `GuardDecision` and `SecurityScanResult`. Request options are camelCase too (`maxTokens`, `targetPreset`).
 
 ## Links
 
