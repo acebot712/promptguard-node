@@ -160,6 +160,35 @@ describe("Contract: Redaction enforcement", () => {
       auto.getGuardClient.mockReturnValue({ scan: jest.fn().mockResolvedValue(decision) })
       auto.getMode.mockReturnValue(c.mode)
       auto.isFailOpen.mockReturnValue(true)
+
+      if ((c.direction ?? "input") === "output") {
+        // Output-direction cases drive the response-scan path: no input
+        // scan (nothing extracted), the wrapped call returns the scanned
+        // content as its response, and a redact decision must block in
+        // enforce mode (responses cannot be rewritten in flight).
+        auto.shouldScanResponses.mockReturnValue(true)
+        const responseText: string = c.scanned_messages[0].content
+        const original = jest.fn().mockResolvedValue(responseText)
+        const patched = createPatchedMethod(original, {
+          framework: "contract",
+          extractMessages: () => ({ messages: [] }),
+          extractResponseText: (response) => response as string,
+        })
+
+        if (c.expect === "block") {
+          await expect(patched({})).rejects.toThrow(PromptGuardBlockedError)
+          expect(original).toHaveBeenCalled()
+        } else if (c.expect === "passthrough") {
+          await expect(patched({})).resolves.toBe(responseText)
+          expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("would redact"))
+        } else {
+          throw new Error(`${c.name}: unknown output expect ${c.expect}`)
+        }
+
+        warnSpy.mockRestore()
+        return
+      }
+
       auto.shouldScanResponses.mockReturnValue(false)
 
       const forwarded: unknown[] = []
