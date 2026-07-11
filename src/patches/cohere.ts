@@ -20,6 +20,27 @@ let patched = false
 // Message conversion
 // ---------------------------------------------------------------------------
 
+/**
+ * Flatten Cohere V2 structured content (`[{ type: "text", text }, ...]`) to
+ * scannable text. `String()` on a content-part array would yield
+ * `"[object Object]"` and the real text would never be scanned. Mirrors the
+ * flattening in patches/openai.ts.
+ */
+function flattenContent(content: unknown): string {
+  if (typeof content === "string") return content
+  if (Array.isArray(content)) {
+    const textParts: string[] = []
+    for (const part of content) {
+      if (typeof part === "string") textParts.push(part)
+      else if ((part as Record<string, unknown> | null)?.type === "text") {
+        textParts.push(String((part as Record<string, unknown>).text ?? ""))
+      }
+    }
+    return textParts.join("\n")
+  }
+  return String(content ?? "")
+}
+
 export function messagesToGuardFormat(params: Record<string, unknown>): GuardMessage[] {
   const result: GuardMessage[] = []
 
@@ -27,7 +48,7 @@ export function messagesToGuardFormat(params: Record<string, unknown>): GuardMes
     for (const msg of params.messages) {
       if (!msg) continue
       const role = String(msg.role ?? "user")
-      const content = String(msg.content ?? "")
+      const content = flattenContent(msg.content ?? "")
       result.push({ role, content })
     }
     return result
@@ -37,7 +58,7 @@ export function messagesToGuardFormat(params: Record<string, unknown>): GuardMes
     for (const msg of params.chatHistory) {
       if (!msg) continue
       const role = String(msg.role ?? "user")
-      const content = String(msg.message ?? msg.content ?? "")
+      const content = msg.message != null ? String(msg.message) : flattenContent(msg.content ?? "")
       result.push({ role, content })
     }
   }
@@ -86,7 +107,13 @@ export function applyRedactionToArgs(args: unknown[], redacted: GuardMessage[]):
     const newMessages = params.messages.map((msg) => {
       if (!msg) return msg
       const r = redacted[guardIdx++]
-      if (r && typeof msg === "object") return { ...msg, content: r.content }
+      if (r && typeof msg === "object") {
+        const m = msg as Record<string, unknown>
+        // Preserve the structured shape: content-part arrays are rebuilt as
+        // a text part rather than collapsed to a bare string.
+        const content = Array.isArray(m.content) ? [{ type: "text", text: r.content }] : r.content
+        return { ...m, content }
+      }
       return msg
     })
     return [{ ...params, messages: newMessages }, ...args.slice(1)]

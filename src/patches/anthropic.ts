@@ -121,7 +121,11 @@ export function applyRedactionToArgs(
     if (!msg) return msg
     const r = redactedMessages[guardIdx++]
     if (r && typeof msg === "object") {
-      return { ...(msg as Record<string, unknown>), content: r.content }
+      const m = msg as Record<string, unknown>
+      // Preserve the multimodal shape: array content is rebuilt as a text
+      // block rather than collapsed to a bare string.
+      const content = Array.isArray(m.content) ? [{ type: "text", text: r.content }] : r.content
+      return { ...m, content }
     }
     return msg
   })

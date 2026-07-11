@@ -96,15 +96,19 @@ export function createPatchedMethod(
         logger.warn(`[monitor] would block: ${decision.threatType} (event=${decision.eventId})`)
       }
 
-      if (decision?.redacted && decision.redactedMessages) {
+      if (decision?.redacted) {
         if (getMode() === "enforce") {
-          const redactedArgs = config.applyRedaction
-            ? config.applyRedaction(args, decision.redactedMessages)
-            : null
+          // A redact decision with missing/empty redactedMessages cannot be
+          // honored either — treat it exactly like an unredactable shape.
+          const redactedArgs =
+            decision.redactedMessages?.length && config.applyRedaction
+              ? config.applyRedaction(args, decision.redactedMessages)
+              : null
           if (redactedArgs === null) {
-            // Redaction cannot be applied to this call shape. Sending the
-            // unredacted content would silently leak what the Guard API
-            // asked us to redact, so escalate to a block in enforce mode.
+            // Redaction cannot be applied to this call shape (or the Guard
+            // API returned no redacted messages). Sending the unredacted
+            // content would silently leak what the Guard API asked us to
+            // redact, so escalate to a block in enforce mode.
             logger.error(
               `redact decision could not be applied for ${config.framework}; ` +
                 `escalating to block (event=${decision.eventId})`,
