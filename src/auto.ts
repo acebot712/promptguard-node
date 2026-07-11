@@ -51,6 +51,8 @@ export interface InitOptions {
   /**
    * SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress all
    * SDK logging, or `"info"`/`"debug"` for the init banner and more detail.
+   * NOTE: this sets the **process-global** SDK log level (shared with the
+   * framework integrations); the most recent setter wins.
    */
   logLevel?: LogLevel
   /** Convenience shorthand for `logLevel: "silent"`. */

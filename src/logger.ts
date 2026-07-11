@@ -9,6 +9,13 @@
  * Default level is "warn": warnings/errors surface, info/debug are suppressed.
  * Set verbosity via {@link setLogLevel} (or the `logLevel` / `silent` options
  * on `init()` / integration constructors).
+ *
+ * NOTE: the log level is **process-global**, not per-instance. Passing
+ * `logLevel` / `silent` to `init()`, `PromptGuardCallbackHandler`, or
+ * `promptGuardMiddleware` mutates the shared level for the whole process —
+ * the most recently constructed instance wins. If you need different
+ * verbosity for different clients, call {@link setLogLevel} around the
+ * code paths you care about instead.
  */
 
 export type LogLevel = "debug" | "info" | "warn" | "error" | "silent"
