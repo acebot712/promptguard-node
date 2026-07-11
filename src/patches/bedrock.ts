@@ -274,7 +274,14 @@ export function applyRedactionToArgs(args: unknown[], redacted: GuardMessage[]):
   }
 }
 
-function extractBedrockResponseText(response: unknown, commandName: string): string {
+/**
+ * Extract assistant text from a Bedrock `send()` response for output
+ * scanning. Converse responses carry `output.message.content` text blocks;
+ * invoke-model responses carry a JSON `body` (Anthropic `completion`,
+ * Llama/Mistral `generation`, or Titan `results[].outputText`).
+ * Exported for tests.
+ */
+export function extractBedrockResponseText(response: unknown, commandName: string): string {
   if (!response || typeof response !== "object") return ""
   const obj = response as Record<string, unknown>
 

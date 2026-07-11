@@ -8,6 +8,7 @@ import {
   applyRedactionToArgs as bedrockApplyRedaction,
   extractCommandMessages as bedrockExtractCommand,
   extractMessagesFromBody as bedrockExtractMessages,
+  extractBedrockResponseText,
 } from "../src/patches/bedrock"
 import {
   applyRedactionToArgs as cohereApplyRedaction,
@@ -776,5 +777,67 @@ describe("Bedrock applyRedactionToArgs", () => {
         redacted(["x"]),
       ),
     ).toBeNull()
+  })
+})
+
+describe("Bedrock extractBedrockResponseText", () => {
+  const invokeBody = (obj: unknown) =>
+    ({ body: new TextEncoder().encode(JSON.stringify(obj)) }) as unknown
+
+  test("ConverseCommand: concatenates output.message.content text blocks", () => {
+    const response = {
+      output: {
+        message: {
+          role: "assistant",
+          content: [{ text: "Hello" }, { toolUse: { name: "t" } }, { text: " world" }],
+        },
+      },
+      stopReason: "end_turn",
+    }
+    expect(extractBedrockResponseText(response, "ConverseCommand")).toBe("Hello world")
+  })
+
+  test("ConverseCommand: returns empty string when content is missing", () => {
+    expect(extractBedrockResponseText({ output: {} }, "ConverseCommand")).toBe("")
+    expect(extractBedrockResponseText({}, "ConverseCommand")).toBe("")
+    expect(extractBedrockResponseText(null, "ConverseCommand")).toBe("")
+  })
+
+  test("InvokeModelCommand: anthropic `completion` body", () => {
+    const response = invokeBody({ completion: "Hi from Claude", stop_reason: "end_turn" })
+    expect(extractBedrockResponseText(response, "InvokeModelCommand")).toBe("Hi from Claude")
+  })
+
+  test("InvokeModelCommand: llama/mistral `generation` body", () => {
+    const response = invokeBody({ generation: "Hi from Llama" })
+    expect(extractBedrockResponseText(response, "InvokeModelCommand")).toBe("Hi from Llama")
+  })
+
+  test("InvokeModelCommand: titan `results[].outputText` body", () => {
+    const response = invokeBody({ results: [{ outputText: "Hi from Titan" }] })
+    expect(extractBedrockResponseText(response, "InvokeModelCommand")).toBe("Hi from Titan")
+  })
+
+  test("InvokeModelCommand: `results[].text` fallback", () => {
+    const response = invokeBody({ results: [{ text: "Hi" }] })
+    expect(extractBedrockResponseText(response, "InvokeModelCommand")).toBe("Hi")
+  })
+
+  test("InvokeModelCommand: Buffer body is decoded like Uint8Array", () => {
+    const response = { body: Buffer.from(JSON.stringify({ completion: "buffered" })) }
+    expect(extractBedrockResponseText(response, "InvokeModelCommand")).toBe("buffered")
+  })
+
+  test("InvokeModelCommand: malformed or missing body yields empty string", () => {
+    expect(
+      extractBedrockResponseText(
+        { body: new TextEncoder().encode("not json") },
+        "InvokeModelCommand",
+      ),
+    ).toBe("")
+    expect(extractBedrockResponseText({ body: "plain string" }, "InvokeModelCommand")).toBe("")
+    expect(extractBedrockResponseText({}, "InvokeModelCommand")).toBe("")
+    // Unrecognized body keys extract nothing.
+    expect(extractBedrockResponseText(invokeBody({ other: "x" }), "InvokeModelCommand")).toBe("")
   })
 })
