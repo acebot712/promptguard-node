@@ -184,7 +184,14 @@ function applyPatches(): void {
         revert: () => void
       }
       if (patchModule.apply()) {
-        appliedPatches.push({ name: mod.name, revert: patchModule.revert })
+        // apply() is idempotent per patch module, so a second init() without
+        // shutdown() reports "already patched" success. Skip the push when
+        // the patch is already tracked — a duplicate entry would make the
+        // getAppliedPatches() canary lie and call revert() twice on
+        // shutdown().
+        if (!appliedPatches.some((p) => p.name === mod.name)) {
+          appliedPatches.push({ name: mod.name, revert: patchModule.revert })
+        }
       } else {
         logger.debug(
           `${mod.name} patch not applied: SDK not resolvable via require() ` +
