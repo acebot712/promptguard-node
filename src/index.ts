@@ -28,7 +28,7 @@
  */
 
 // Auto-instrumentation
-export { type InitOptions, init, shutdown } from "./auto"
+export { getAppliedPatches, type InitOptions, init, shutdown } from "./auto"
 // Proxy client
 export { default, PromptGuard, PromptGuardError } from "./client"
 // Guard client (standalone scanning)
