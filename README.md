@@ -52,6 +52,14 @@ const response = await client.chat.completions.create({
 });
 ```
 
+> `init()` is intentionally quiet on success (SDK logging defaults to `warn`). To confirm which provider SDKs are actually being protected, read `getAppliedPatches()` — the source of truth for what got patched:
+> ```typescript
+> import { init, getAppliedPatches } from 'promptguard-sdk';
+> init({ apiKey: 'pg_live_xxx' });
+> console.log('PromptGuard protecting:', getAppliedPatches()); // e.g. ['openai']
+> ```
+> If this list is empty, nothing is being scanned (see [Limitations: ESM apps](#limitations)). Set `logLevel: 'info'` on `init()` to also emit a one-line confirmation banner.
+
 ### Supported SDKs
 
 Auto-instrumentation patches the `create` / `generateContent` / `chat` / `send` methods on:
@@ -229,17 +237,33 @@ const outputDecision = await guard.scan(
 
 ## Retry Logic
 
-Both `PromptGuard` and `GuardClient` support configurable retry behavior for transient failures:
+Both the proxy client (`PromptGuard`) and the Guard client (`GuardClient`) support configurable retry behavior for transient failures:
 
 ```typescript
+// Proxy client
 const pg = new PromptGuard({
   apiKey: 'pg_live_xxx',
   maxRetries: 3,      // Number of retry attempts (default: 3)
   retryDelay: 500,     // Base delay in ms between retries (default: 1000)
 });
+
+// Guard client (standalone scanning)
+const guard = new GuardClient({
+  apiKey: 'pg_live_xxx',
+  maxRetries: 3,      // default: 3
+  retryDelay: 500,     // default: 1000
+});
+```
+
+Because auto-instrumentation (`init()`) and the framework integrations all scan through `GuardClient`, they retry transient Guard API failures too — pass `maxRetries` / `retryDelay` to `init()`, `PromptGuardCallbackHandler`, or `promptGuardMiddleware`:
+
+```typescript
+init({ apiKey: 'pg_live_xxx', maxRetries: 3, retryDelay: 500 });
 ```
 
 Retries use exponential backoff starting from `retryDelay`, with jitter so concurrent clients don't retry in lockstep. A server-provided `Retry-After` header is honored but clamped to 60 seconds. Only transient errors (network timeouts, 429/5xx responses) are retried; client errors (4xx) fail immediately.
+
+> **Enforcement is unchanged by retries.** Retrying only affects *transient* Guard failures (network errors, 429/5xx). A real `block` / `redact` decision is terminal and is never retried, and once retries are exhausted a `GuardApiError` is raised so your existing `failOpen` policy governs — exactly as it would with `maxRetries: 0`. Retries never turn a would-be error into an allow.
 
 > **Idempotency caveat:** all requests — including `POST`s — are retried on transient failure. If a request reached the server but the response was lost, the retry re-submits it. Chat/completion/scan calls are safe to re-submit, but each attempt may bill separately; set `maxRetries: 0` if you need strict at-most-once semantics.
 
