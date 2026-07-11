@@ -47,6 +47,25 @@ function resolveRef(ref: string): string {
   return name
 }
 
+/**
+ * Escape an enum value for interpolation inside a double-quoted TS string
+ * literal — backslashes first, then quotes, so a `"` in a spec enum can't
+ * break out of the generated literal.
+ */
+function escapeStringLiteral(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+}
+
+/**
+ * Sanitize a spec description for interpolation into a block comment —
+ * strip the block-comment terminator sequence (asterisk-slash) so a
+ * description can't end the comment early and inject code into the
+ * generated file.
+ */
+function sanitizeComment(text: string): string {
+  return text.replace(/\*\//g, "")
+}
+
 function mapType(prop: SchemaProperty): string {
   if (prop.$ref) return resolveRef(prop.$ref)
   if (prop.anyOf) {
@@ -54,7 +73,7 @@ function mapType(prop: SchemaProperty): string {
     return types.join(" | ")
   }
   if (prop.enum) {
-    return prop.enum.map((v) => `"${v}"`).join(" | ")
+    return prop.enum.map((v) => `"${escapeStringLiteral(v)}"`).join(" | ")
   }
 
   switch (prop.type) {
@@ -78,11 +97,13 @@ function generateInterface(name: string, schema: Schema): string {
   const lines: string[] = []
 
   if (schema.description) {
-    lines.push(`/** ${schema.description} */`)
+    lines.push(`/** ${sanitizeComment(schema.description)} */`)
   }
 
   if (schema.enum) {
-    lines.push(`export type ${name} = ${schema.enum.map((v) => `"${v}"`).join(" | ")}`)
+    lines.push(
+      `export type ${name} = ${schema.enum.map((v) => `"${escapeStringLiteral(v)}"`).join(" | ")}`,
+    )
     lines.push("")
     return lines.join("\n")
   }
@@ -100,7 +121,7 @@ function generateInterface(name: string, schema: Schema): string {
     const optional = required.has(propName) ? "" : "?"
     const tsType = mapType(prop)
     if (prop.description) {
-      lines.push(`  /** ${prop.description} */`)
+      lines.push(`  /** ${sanitizeComment(prop.description)} */`)
     }
     lines.push(`  ${propName}${optional}: ${tsType}`)
   }
