@@ -96,11 +96,26 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
           logger.warn(`[monitor] would block: ${decision.threatType} (event=${decision.eventId})`)
         }
 
-        if (decision.redacted && decision.redactedMessages && mode === "enforce") {
-          return {
-            ...params,
-            prompt: applyRedactionToPrompt(prompt, decision.redactedMessages, indices),
+        if (decision.redacted) {
+          if (mode === "enforce") {
+            if (!decision.redactedMessages?.length) {
+              // A redact decision without redacted messages cannot be
+              // honored; proceeding would silently send the content the
+              // Guard API asked us to redact — escalate to a block.
+              logger.error(
+                `redact decision returned no redacted messages; ` +
+                  `escalating to block (event=${decision.eventId})`,
+              )
+              throw new PromptGuardBlockedError(decision)
+            }
+            return {
+              ...params,
+              prompt: applyRedactionToPrompt(prompt, decision.redactedMessages, indices),
+            }
           }
+          logger.warn(
+            `[monitor] would redact: content passed through unredacted (event=${decision.eventId})`,
+          )
         }
       } catch (err) {
         if (err instanceof PromptGuardBlockedError) throw err
@@ -128,11 +143,9 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
           params: Record<string, unknown>
         }) => {
           const result = await doGenerate()
-          const typed = result as Record<string, unknown>
 
-          const toolCalls = typed?.toolCalls as Record<string, unknown>[] | undefined
-          const text = typed?.text ?? toolCalls?.[0]?.args ?? null
-          if (typeof text !== "string" || !text) return result
+          const text = extractGeneratedText(result as Record<string, unknown>)
+          if (!text) return result
 
           try {
             const respDecision = await guard.scan(
@@ -170,6 +183,52 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Extract all scannable text from a `doGenerate` result.
+ *
+ * Handles both AI SDK result shapes:
+ *  - **v4 (LanguageModelV1):** top-level `text` string plus `toolCalls`
+ *    (every tool call's `args`/`input` is scanned — not just the first).
+ *  - **v5 (LanguageModelV2):** `content` is an array of parts
+ *    (`{ type: "text", text }` / `{ type: "tool-call", input }`) with no
+ *    top-level `text`.
+ *
+ * Returns the concatenated text, or `null` when nothing scannable exists.
+ */
+function extractGeneratedText(result: Record<string, unknown> | null | undefined): string | null {
+  const texts: string[] = []
+
+  const stringify = (value: unknown): string =>
+    typeof value === "string" ? value : JSON.stringify(value)
+
+  if (typeof result?.text === "string" && result.text) texts.push(result.text)
+
+  if (Array.isArray(result?.content)) {
+    for (const raw of result.content) {
+      if (!raw || typeof raw !== "object") continue
+      const part = raw as Record<string, unknown>
+      if (part.type === "text" && typeof part.text === "string" && part.text) {
+        texts.push(part.text)
+      } else if (part.type === "tool-call") {
+        const args = part.input ?? part.args
+        if (args != null) texts.push(stringify(args))
+      }
+    }
+  }
+
+  if (Array.isArray(result?.toolCalls)) {
+    for (const raw of result.toolCalls) {
+      if (!raw || typeof raw !== "object") continue
+      const call = raw as Record<string, unknown>
+      const args = call.args ?? call.input
+      if (args != null) texts.push(stringify(args))
+    }
+  }
+
+  const combined = texts.join("\n")
+  return combined || null
+}
 
 /**
  * Convert a Vercel AI SDK prompt to guard messages.
