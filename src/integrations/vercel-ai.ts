@@ -65,7 +65,13 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
 
   const { apiKey, baseUrl } = resolveCredentials(options.apiKey, options.baseUrl)
 
-  const guard = new GuardClient({ apiKey, baseUrl, timeout: options.timeout })
+  const guard = new GuardClient({
+    apiKey,
+    baseUrl,
+    timeout: options.timeout,
+    maxRetries: options.maxRetries,
+    retryDelay: options.retryDelay,
+  })
   const mode = options.mode ?? "enforce"
   const scanResponses = options.scanResponses ?? false
   const failOpen = options.failOpen ?? true

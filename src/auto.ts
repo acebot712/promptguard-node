@@ -49,6 +49,14 @@ export interface InitOptions {
   /** HTTP timeout in ms for Guard API calls (default: `10000`). */
   timeout?: number
   /**
+   * Retry attempts for transient Guard API failures (network errors and
+   * 429/5xx responses) before the `failOpen` policy governs. Default: `3`.
+   * Retries never change the eventual decision — see {@link GuardClientConfig}.
+   */
+  maxRetries?: number
+  /** Base delay in ms between Guard API retries (exponential backoff). Default: `1000`. */
+  retryDelay?: number
+  /**
    * SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress all
    * SDK logging, or `"info"`/`"debug"` for the init banner and more detail.
    * NOTE: this sets the **process-global** SDK log level (shared with the
@@ -99,6 +107,8 @@ export function init(options: InitOptions = {}): void {
     apiKey,
     baseUrl,
     timeout: options.timeout ?? 10_000,
+    maxRetries: options.maxRetries,
+    retryDelay: options.retryDelay,
   })
 
   mode = resolvedMode
@@ -107,8 +117,15 @@ export function init(options: InitOptions = {}): void {
 
   applyPatches()
 
-  // Suppressed by default (info level). Set logLevel: "info" to see this.
-  logger.info(`auto-instrumentation initialised (mode=${mode}, fail_open=${failOpen})`)
+  // One-line confirmation of which provider SDKs are actually protected.
+  // Suppressed by default (info level); set logLevel: "info" to see it, or
+  // read the same list programmatically via getAppliedPatches(). When ZERO
+  // patches applied, applyPatches() already logged a warn (visible by default).
+  const protecting = getAppliedPatches()
+  logger.info(
+    `auto-instrumentation initialised (mode=${mode}, fail_open=${failOpen}) — ` +
+      `protecting: ${protecting.length ? protecting.join(", ") : "none"}`,
+  )
 }
 
 export function shutdown(): void {

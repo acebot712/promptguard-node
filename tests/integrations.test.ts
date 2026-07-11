@@ -702,7 +702,9 @@ describe("promptGuardMiddleware wrapGenerate", () => {
 
   test("guard outage + failOpen=true returns the result", async () => {
     global.fetch = jest.fn().mockRejectedValue(new TypeError("fetch failed"))
-    const mw = middleware({ failOpen: true })
+    // maxRetries: 0 — this test asserts the fail-open outcome of an outage, not
+    // the retry schedule (covered by the GuardClient retry tests).
+    const mw = middleware({ failOpen: true, maxRetries: 0 })
     // biome-ignore lint/style/noNonNullAssertion: defined when scanResponses=true
     const result = await mw.wrapGenerate!({ doGenerate, params: {} })
     expect(result).toBe(generated)
@@ -710,7 +712,8 @@ describe("promptGuardMiddleware wrapGenerate", () => {
 
   test("guard outage + failOpen=false rethrows the GuardApiError", async () => {
     global.fetch = jest.fn().mockRejectedValue(new TypeError("fetch failed"))
-    const mw = middleware({ failOpen: false })
+    // maxRetries: 0 — asserts the fail-closed outcome, not the retry schedule.
+    const mw = middleware({ failOpen: false, maxRetries: 0 })
     await expect(
       // biome-ignore lint/style/noNonNullAssertion: defined when scanResponses=true
       mw.wrapGenerate!({ doGenerate, params: {} }),

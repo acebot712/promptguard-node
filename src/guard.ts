@@ -8,6 +8,12 @@
 
 import { buildRequestUrl } from "./client"
 import { DEFAULT_BASE_URL } from "./resolve"
+import {
+  computeRetryDelayMs,
+  isRetryableNetworkError,
+  parseRetryAfterMs,
+  RETRYABLE_STATUS_CODES,
+} from "./retry"
 import { SDK_VERSION } from "./version"
 
 // ---------------------------------------------------------------------------
@@ -168,12 +174,24 @@ export interface GuardClientConfig {
   apiKey: string
   baseUrl?: string
   timeout?: number
+  /**
+   * Number of retry attempts for transient Guard API failures
+   * (network errors and 429/5xx responses). Default: `3`. Set to `0` for
+   * strict at-most-once semantics. Retries never change the eventual
+   * decision — after they are exhausted a {@link GuardApiError} is thrown so
+   * the caller's `failOpen` policy governs, exactly as with no retries.
+   */
+  maxRetries?: number
+  /** Base delay in ms between retries (exponential backoff). Default: `1000`. */
+  retryDelay?: number
 }
 
 export class GuardClient {
   private readonly apiKey: string
   private readonly guardUrl: string
   private readonly timeout: number
+  private readonly maxRetries: number
+  private readonly retryDelay: number
 
   constructor(config: GuardClientConfig) {
     this.apiKey = config.apiKey
@@ -181,6 +199,9 @@ export class GuardClient {
     // carrying a query string or fragment keeps it after the endpoint path.
     this.guardUrl = buildRequestUrl(config.baseUrl ?? DEFAULT_BASE_URL, "/guard")
     this.timeout = config.timeout ?? 10_000
+    // Clamp to >= 0 so a negative value can never collapse the request loop.
+    this.maxRetries = Math.max(0, config.maxRetries ?? 3)
+    this.retryDelay = Math.max(0, config.retryDelay ?? 1000)
   }
 
   private headers(): Record<string, string> {
@@ -231,37 +252,75 @@ export class GuardClient {
     const payload: GuardRequestBody = { messages, direction }
     if (model) payload.model = model
     if (context) payload.context = context
+    const serialized = JSON.stringify(payload)
 
-    let resp: Response
-    try {
-      resp = await fetch(this.guardUrl, {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(this.timeout),
-      })
-    } catch (err) {
-      throw new GuardApiError(
-        `Guard API call failed: ${err instanceof Error ? err.message : String(err)}`,
-      )
+    // Retry only transient failures (network errors, 429/5xx). Every terminal
+    // outcome is still surfaced as a GuardApiError so the caller's `failOpen`
+    // policy governs — retries never turn a would-be error into an allow, and
+    // a block/redact decision (a successful 2xx) is never retried. This
+    // preserves the exact enforcement semantics of the no-retry path.
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      let resp: Response
+      try {
+        resp = await fetch(this.guardUrl, {
+          method: "POST",
+          headers: this.headers(),
+          body: serialized,
+          signal: AbortSignal.timeout(this.timeout),
+        })
+      } catch (err) {
+        // Deterministic pre-flight failures can never succeed on retry;
+        // only retry genuine transient network dispatch failures.
+        if (isRetryableNetworkError(err) && attempt < this.maxRetries) {
+          await this.sleep(computeRetryDelayMs(this.retryDelay, attempt))
+          continue
+        }
+        throw new GuardApiError(
+          `Guard API call failed: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
+
+      if (RETRYABLE_STATUS_CODES.has(resp.status) && attempt < this.maxRetries) {
+        // Release the connection back to the keep-alive pool before retrying.
+        await resp.body?.cancel().catch(() => {})
+        const retryAfterMs = parseRetryAfterMs(resp.headers?.get?.("retry-after"))
+        await this.sleep(computeRetryDelayMs(this.retryDelay, attempt, retryAfterMs))
+        continue
+      }
+
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "")
+        throw new GuardApiError(
+          `Guard API returned ${resp.status}: ${text.slice(0, 200)}`,
+          resp.status,
+        )
+      }
+
+      // A 2xx with a malformed body must not escape as a raw SyntaxError —
+      // wrap it in GuardApiError so the caller's failOpen policy governs. A
+      // truncated 2xx body can be transient, so it is retried like other
+      // transient failures before finally surfacing.
+      let body: GuardResponseBody
+      try {
+        body = (await resp.json()) as GuardResponseBody
+      } catch {
+        if (attempt < this.maxRetries) {
+          await this.sleep(computeRetryDelayMs(this.retryDelay, attempt))
+          continue
+        }
+        throw new GuardApiError("invalid JSON in Guard response", resp.status)
+      }
+      // A valid 2xx body with an invalid `decision` is a definitive response,
+      // not a transient failure — GuardDecision throws GuardApiError and we do
+      // NOT retry it (mirrors the no-retry path).
+      return new GuardDecision(body)
     }
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "")
-      throw new GuardApiError(
-        `Guard API returned ${resp.status}: ${text.slice(0, 200)}`,
-        resp.status,
-      )
-    }
+    // Unreachable in practice: every loop exit above either returns or throws.
+    throw new GuardApiError("Guard API unreachable after retries")
+  }
 
-    // A 2xx with a malformed body must not escape as a raw SyntaxError —
-    // wrap it in GuardApiError so the caller's failOpen policy governs.
-    let body: GuardResponseBody
-    try {
-      body = (await resp.json()) as GuardResponseBody
-    } catch {
-      throw new GuardApiError("invalid JSON in Guard response", resp.status)
-    }
-    return new GuardDecision(body)
+  private sleep(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms))
   }
 }

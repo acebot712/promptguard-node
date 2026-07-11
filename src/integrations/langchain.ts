@@ -134,7 +134,13 @@ export class PromptGuardCallbackHandler {
 
     const { apiKey, baseUrl } = resolveCredentials(options.apiKey, options.baseUrl)
 
-    this.guard = new GuardClient({ apiKey, baseUrl, timeout: options.timeout })
+    this.guard = new GuardClient({
+      apiKey,
+      baseUrl,
+      timeout: options.timeout,
+      maxRetries: options.maxRetries,
+      retryDelay: options.retryDelay,
+    })
     this.mode = options.mode ?? "enforce"
     // Default false: consistent with init() and the Vercel AI middleware
     // (least surprise + no unexpected per-response Guard API cost).
