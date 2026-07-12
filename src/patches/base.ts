@@ -22,10 +22,44 @@ export interface PatchConfig {
     thisArg: unknown,
   ) => { messages: GuardMessage[]; model?: string }
   extractResponseText?: (response: unknown, args: unknown[]) => string | null
-  applyRedaction?: (args: unknown[], redactedMessages: GuardMessage[]) => unknown[]
+  /**
+   * Rewrite the call args with the redacted message contents.
+   * Return `null` when the message shape cannot be redacted safely — in
+   * enforce mode that escalates the redact decision to a block.
+   */
+  applyRedaction?: (args: unknown[], redactedMessages: GuardMessage[]) => unknown[] | null
   shouldIntercept?: (args: unknown[], thisArg: unknown) => boolean
 }
 
+/**
+ * Best-effort detection of streaming calls/results across the patched SDKs.
+ *
+ * Covers `{ stream: true }` request params (OpenAI/Anthropic/Cohere),
+ * async-iterable results (OpenAI/Anthropic `Stream`), and Bedrock's
+ * `ConverseStreamCommand` / `InvokeModelWithResponseStreamCommand`.
+ */
+function isStreaming(args: unknown[], response: unknown): boolean {
+  const params = args[0] as Record<string, unknown> | undefined
+  if (params && typeof params === "object") {
+    if (params.stream === true) return true
+    const commandName = (params.constructor as { name?: string } | undefined)?.name ?? ""
+    if (commandName.includes("Stream")) return true
+  }
+  if (response && typeof response === "object" && Symbol.asyncIterator in response) return true
+  return false
+}
+
+/**
+ * Wrap an SDK method with pre-call (and optionally post-call) Guard scans.
+ *
+ * Known limitation: the wrapper is a plain `async` function, so SDK-specific
+ * augmented promise types are not preserved. In particular the OpenAI SDK's
+ * `APIPromise` helpers (`.withResponse()`, `.asResponse()`) are unavailable
+ * on patched methods — `await` the call and use the plain result instead.
+ * Output scanning (`scanResponses: true`) is also skipped for streaming
+ * calls, since the stream is consumed incrementally by the caller; a debug
+ * log is emitted when that happens. See README "Limitations".
+ */
 export function createPatchedMethod(
   original: (...args: unknown[]) => unknown,
   config: PatchConfig,
@@ -41,6 +75,15 @@ export function createPatchedMethod(
     if (!guard) return original.apply(this, args)
 
     const { messages, model } = config.extractMessages(args, this)
+
+    if (!messages.length) {
+      // An intercepted call whose body we could not extract anything from
+      // proceeds unscanned — say so instead of failing silently, since a
+      // provider body shape we don't recognize is an enforcement gap.
+      logger.debug(
+        `[${config.framework}] intercepted call yielded no scannable messages; proceeding unscanned`,
+      )
+    }
 
     if (messages.length) {
       let decision = null
@@ -62,9 +105,45 @@ export function createPatchedMethod(
         logger.warn(`[monitor] would block: ${decision.threatType} (event=${decision.eventId})`)
       }
 
-      if (decision?.redacted && decision.redactedMessages && config.applyRedaction) {
+      if (decision?.redacted) {
+        const redactedMessages = decision.redactedMessages ?? []
+        // A redactedMessages list SHORTER than the scanned guard messages
+        // would leave the unmatched trailing messages unredacted — the
+        // per-SDK mappers silently keep original content for guard indices
+        // past the end of the list. Treat a partial list like an
+        // unredactable shape.
+        const isPartial = redactedMessages.length < messages.length
         if (getMode() === "enforce") {
-          args = config.applyRedaction(args, decision.redactedMessages)
+          // A redact decision with missing/empty/partial redactedMessages
+          // cannot be honored either — treat it exactly like an
+          // unredactable shape.
+          const redactedArgs =
+            redactedMessages.length && !isPartial && config.applyRedaction
+              ? config.applyRedaction(args, redactedMessages)
+              : null
+          if (redactedArgs === null) {
+            // Redaction cannot be applied to this call shape (or the Guard
+            // API returned no/partial redacted messages). Sending the
+            // unredacted content would silently leak what the Guard API
+            // asked us to redact, so escalate to a block in enforce mode.
+            logger.error(
+              `redact decision could not be applied for ${config.framework}` +
+                (isPartial
+                  ? ` (${redactedMessages.length} redacted messages for ${messages.length} scanned)`
+                  : "") +
+                `; escalating to block (event=${decision.eventId})`,
+            )
+            throw new PromptGuardBlockedError(decision)
+          }
+          args = redactedArgs
+        } else {
+          logger.warn(
+            `[monitor] would redact: content passed through unredacted` +
+              (isPartial
+                ? ` (partial: ${redactedMessages.length} redacted messages for ${messages.length} scanned)`
+                : "") +
+              ` (event=${decision.eventId})`,
+          )
         }
       }
     }
@@ -72,6 +151,14 @@ export function createPatchedMethod(
     const response = await original.apply(this, args)
 
     if (shouldScanResponses() && response && guard && config.extractResponseText) {
+      if (isStreaming(args, response)) {
+        // Streaming bodies are consumed incrementally by the caller; we
+        // cannot buffer them here without breaking stream semantics.
+        logger.debug(
+          `output scanning skipped for streaming response (framework=${config.framework})`,
+        )
+        return response
+      }
       try {
         const text = config.extractResponseText(response, args)
         if (text) {
@@ -80,8 +167,16 @@ export function createPatchedMethod(
             "output",
             model,
           )
-          if (respDecision.blocked && getMode() === "enforce") {
-            throw new PromptGuardBlockedError(respDecision)
+          if (respDecision.blocked || respDecision.redacted) {
+            // A response cannot be rewritten after the fact, so an
+            // output-direction redact decision is enforced as a block
+            // (mirrors the framework integrations).
+            if (getMode() === "enforce") {
+              throw new PromptGuardBlockedError(respDecision)
+            }
+            logger.warn(
+              `[monitor] would ${respDecision.redacted ? "redact" : "block"} response: ${respDecision.threatType}`,
+            )
           }
         }
       } catch (err: unknown) {

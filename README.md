@@ -25,6 +25,8 @@ Get a free API key at [app.promptguard.co](https://app.promptguard.co).
 > **PromptGuard fails open by default** — if the Guard API is unavailable, calls proceed *unscanned* so your app stays up. Set `failOpen: false` to block (fail closed) on a Guard outage instead.
 
 > **Module format:** the package currently ships **CommonJS** (`require`) builds. It works in ESM projects via Node's CJS interop (`import { init } from 'promptguard-sdk'` transpiles to a `require`), and in plain CommonJS via `const { init } = require('promptguard-sdk')`.
+>
+> **Running a native-ESM app?** Auto-instrumentation (`init()`) may not cover your LLM calls — see [Limitations: ESM apps](#limitations) before relying on enforce mode.
 
 ## Option 1: Auto-Instrumentation (Recommended)
 
@@ -50,19 +52,35 @@ const response = await client.chat.completions.create({
 });
 ```
 
+> `init()` is intentionally quiet on success (SDK logging defaults to `warn`). To confirm which provider SDKs are actually being protected, read `getAppliedPatches()` — the source of truth for what got patched:
+> ```typescript
+> import { init, getAppliedPatches } from 'promptguard-sdk';
+> init({ apiKey: 'pg_live_xxx' });
+> console.log('PromptGuard protecting:', getAppliedPatches()); // e.g. ['openai']
+> ```
+> If this list is empty, nothing is being scanned (see [Limitations: ESM apps](#limitations)). Set `logLevel: 'info'` on `init()` to also emit a one-line confirmation banner.
+
 ### Supported SDKs
 
 Auto-instrumentation patches the `create` / `generateContent` / `chat` / `send` methods on:
 
 | SDK | npm Package | What Gets Patched |
 |-----|------------|-------------------|
-| OpenAI | `openai` | `chat.completions.create` |
+| OpenAI | `openai` | `chat.completions.create`, `responses.create` (string and message-item `input` forms) |
 | Anthropic | `@anthropic-ai/sdk` | `messages.create` |
 | Google Generative AI | `@google/generative-ai` | `generateContent` |
 | Cohere | `cohere-ai` | `Client.chat` / `ClientV2.chat` |
-| AWS Bedrock | `@aws-sdk/client-bedrock-runtime` | `BedrockRuntimeClient.send` (InvokeModel, Converse) |
+| AWS Bedrock | `@aws-sdk/client-bedrock-runtime` | `BedrockRuntimeClient.send` (InvokeModel, InvokeModelWithResponseStream, Converse, ConverseStream) |
 
 Any framework built on these SDKs is automatically covered: **LangChain.js**, **Vercel AI SDK**, **AutoGen**, **Semantic Kernel**, and more.
+
+> Patches attach to the modules resolved via CommonJS `require()`. If `init()` finds **no** patchable SDK it logs a warning (nothing would be scanned). You can also verify at runtime with `getAppliedPatches()`:
+> ```typescript
+> import { init, getAppliedPatches } from 'promptguard-sdk';
+> init({ apiKey: 'pg_live_xxx' });
+> console.log(getAppliedPatches()); // e.g. ['openai', 'anthropic']
+> ```
+> Native-ESM apps: see [Limitations: ESM apps](#limitations).
 
 ### Modes
 
@@ -159,6 +177,10 @@ const result = await chain.invoke(
 
 The callback handler provides rich context to PromptGuard - chain names, tool calls, agent steps - for more precise threat detection.
 
+> **Redact decisions block in enforce mode:** LangChain callbacks observe calls but cannot rewrite the inputs of the in-flight LLM call, so a `redact` decision cannot be honored — in enforce mode it is escalated to a block (`PromptGuardBlockedError`) rather than silently sending the content the Guard API asked to redact. Use auto-instrumentation or explicit `GuardClient.scan()` calls if you need actual redaction.
+>
+> `scanResponses` defaults to `false` (consistent with `init()` and the Vercel AI middleware) — pass `scanResponses: true` to opt in to output scanning.
+
 ### Vercel AI SDK
 
 ```typescript
@@ -215,17 +237,35 @@ const outputDecision = await guard.scan(
 
 ## Retry Logic
 
-Both `PromptGuard` and `GuardClient` support configurable retry behavior for transient failures:
+Both the proxy client (`PromptGuard`) and the Guard client (`GuardClient`) support configurable retry behavior for transient failures:
 
 ```typescript
+// Proxy client
 const pg = new PromptGuard({
   apiKey: 'pg_live_xxx',
   maxRetries: 3,      // Number of retry attempts (default: 3)
   retryDelay: 500,     // Base delay in ms between retries (default: 1000)
 });
+
+// Guard client (standalone scanning)
+const guard = new GuardClient({
+  apiKey: 'pg_live_xxx',
+  maxRetries: 3,      // default: 3
+  retryDelay: 500,     // default: 1000
+});
 ```
 
-Retries use exponential backoff starting from `retryDelay`. Only transient errors (network timeouts, 5xx responses) are retried; client errors (4xx) fail immediately.
+Because auto-instrumentation (`init()`) and the framework integrations all scan through `GuardClient`, they retry transient Guard API failures too — pass `maxRetries` / `retryDelay` to `init()`, `PromptGuardCallbackHandler`, or `promptGuardMiddleware`:
+
+```typescript
+init({ apiKey: 'pg_live_xxx', maxRetries: 3, retryDelay: 500 });
+```
+
+Retries use exponential backoff starting from `retryDelay`, with jitter so concurrent clients don't retry in lockstep. A server-provided `Retry-After` header is honored but clamped to 60 seconds. Only transient errors (network timeouts, 429/5xx responses) are retried; client errors (4xx) fail immediately.
+
+> **Enforcement is unchanged by retries.** Retrying only affects *transient* Guard failures (network errors, 429/5xx). A real `block` / `redact` decision is terminal and is never retried, and once retries are exhausted a `GuardApiError` is raised so your existing `failOpen` policy governs — exactly as it would with `maxRetries: 0`. Retries never turn a would-be error into an allow.
+
+> **Idempotency caveat:** all requests — including `POST`s — are retried on transient failure. If a request reached the server but the response was lost, the retry re-submits it. Chat/completion/scan calls are safe to re-submit, but each attempt may bill separately; set `maxRetries: 0` if you need strict at-most-once semantics.
 
 ## Embeddings
 
@@ -275,11 +315,11 @@ const report = await pg.redteam.runAutonomous({
   budget: 200,
   targetPreset: 'support_bot:strict', // snake_case `target_preset` also accepted
 });
-console.log(`Grade: ${report.grade}, Bypass rate: ${(report.bypass_rate * 100).toFixed(0)}%`);
+console.log(`Grade: ${report.grade}, Bypass rate: ${(report.bypassRate * 100).toFixed(0)}%`);
 
 // Get Attack Intelligence stats
 const stats = await pg.redteam.intelligenceStats();
-console.log(`Total patterns: ${stats.total_patterns}`);
+console.log(`Total patterns: ${stats.totalPatterns}`);
 ```
 
 ## Configuration
@@ -298,6 +338,29 @@ console.log(`Total patterns: ${stats.total_patterns}`);
 > The proxy client (`PromptGuard`) talks to the `/api/v1/proxy` endpoints. If you set `baseUrl` / `PROMPTGUARD_BASE_URL` to `.../api/v1` (without `/proxy`), the SDK appends the `/proxy` suffix for you, so requests still land on the proxy.
 >
 > **Security:** the SDK sends your API key (and, in proxy mode, your prompt content) to whatever `PROMPTGUARD_BASE_URL` points at. Self-hosting is supported, so only point it at a host you trust.
+>
+> **Logging is process-global:** `logLevel` / `silent` set a single shared log level for the whole SDK. If several integrations or `init()` calls pass different values, the most recently constructed one wins. Use `setLogLevel()` directly for fine-grained control.
+
+## Limitations
+
+### ESM apps (auto-instrumentation)
+
+Auto-instrumentation (`init()`) patches the provider modules that Node resolves via **CommonJS `require()`**. If your application runs as **native ESM** (`"type": "module"` in package.json, or `.mjs` files) and a provider ships separate ESM builds, the module instances your code `import`s can be *different objects* from the ones the SDK patched — the **dual-package hazard**. In that case your LLM calls bypass the patches entirely and **enforce mode silently protects nothing**.
+
+What to do:
+
+- **Verify at runtime** with `getAppliedPatches()` after `init()` — and note that a patch being listed proves the CJS build was patched, not that your ESM imports go through it. `init()` also logs a warning when it applies zero patches.
+- **Prefer the ESM-safe APIs**, which don't rely on module patching:
+  - LangChain: `PromptGuardCallbackHandler` (`promptguard-sdk/integrations/langchain`)
+  - Vercel AI SDK: `promptGuardMiddleware` (`promptguard-sdk/integrations/vercel-ai`)
+  - Any framework: explicit `GuardClient.scan()` calls around your LLM invocations
+- Transpiled-to-CJS TypeScript apps (the common `tsc`/`ts-node` default) are **not** affected — their `import`s compile to `require()` and hit the patched modules.
+
+### Other limitations
+
+- **Streaming responses are not output-scanned.** With auto-instrumentation and `scanResponses: true`, streaming calls (`stream: true`, Bedrock `ConverseStreamCommand`, etc.) skip the output scan — the stream is consumed incrementally by your code and cannot be buffered without breaking stream semantics. Input scanning still applies. A `debug`-level log is emitted when the output scan is skipped. The same applies to the Vercel AI SDK middleware: `streamText()` outputs are not scanned (`wrapStream` logs the skip); `generateText()` outputs are.
+- **OpenAI `APIPromise` helpers are not preserved by auto-instrumentation.** Patched methods return a plain `Promise`, so `.withResponse()` / `.asResponse()` on `client.chat.completions.create(...)` are unavailable while `init()` is active. `await` the call and use the plain result instead.
+- **Proxy client streaming:** `pg.chat.completions.create({ stream: true })` is rejected with a clear error — streaming is not yet supported by the proxy client.
 
 ## Error Handling
 
@@ -337,6 +400,8 @@ import type {
   IntelligenceStats,
 } from 'promptguard-sdk';
 ```
+
+> **Response fields are camelCase — with one deliberate exception.** The SDK's normalized response objects (the `security`, `redteam`, `agent`, `scrape`, and `guard` namespaces) use camelCase field names (e.g. `report.bypassRate`, `stats.totalPatterns`, `validation.riskScore`, `result.threatsDetected`) regardless of the snake_case wire format — consistent with `GuardDecision` and `SecurityScanResult`. The **OpenAI-compatible** responses (`chat.completions`, `completions`, `embeddings`, i.e. `ChatCompletionResponse`) are the exception: they intentionally preserve OpenAI's snake_case shape (`choices[].finish_reason`, `usage.prompt_tokens`, …) so they stay drop-in compatible with the `openai` client. Request options are camelCase throughout (`maxTokens`, `targetPreset`), including `GuardContext` (`chainName`, `agentId`, `sessionId`, `toolCalls`).
 
 ## Links
 

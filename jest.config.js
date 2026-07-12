@@ -7,12 +7,15 @@ module.exports = {
   moduleDirectories: ["node_modules", "src"],
   collectCoverage: true,
   coverageDirectory: "coverage",
+  // Raised after the audit-round-1 test additions (actual: ~58/59/72/69).
+  // Keep a small buffer below actuals so unrelated refactors don't flake,
+  // but never lower these without adding equivalent coverage elsewhere.
   coverageThreshold: {
     global: {
-      branches: 35,
-      functions: 45,
-      lines: 50,
-      statements: 50,
+      branches: 55,
+      functions: 55,
+      lines: 68,
+      statements: 65,
     },
   },
 }

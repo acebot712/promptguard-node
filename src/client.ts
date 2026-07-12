@@ -4,17 +4,35 @@
  */
 
 import { DEFAULT_BASE_URL, resolveCredentials } from "./resolve"
+import {
+  computeRetryDelayMs,
+  isRetryableNetworkError,
+  parseRetryAfterMs,
+  RETRYABLE_STATUS_CODES,
+} from "./retry"
 import { SDK_VERSION } from "./version"
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-interface PromptGuardConfig {
+export interface PromptGuardConfig {
   apiKey: string
+  /**
+   * API base URL. Defaults to the public PromptGuard proxy
+   * (`https://api.promptguard.co/api/v1/proxy`) or `PROMPTGUARD_BASE_URL`.
+   * The `/proxy` suffix is appended automatically when missing.
+   */
   baseUrl?: string
+  /** HTTP timeout in milliseconds for each request attempt. Default: `30000`. */
   timeout?: number
+  /**
+   * Number of retry attempts for transient failures (network errors and
+   * 429/5xx responses). Default: `3`. Set to `0` for strict at-most-once
+   * semantics. Negative values are clamped to `0`.
+   */
   maxRetries?: number
+  /** Base delay in ms between retries (exponential backoff). Default: `1000`. */
   retryDelay?: number
 }
 
@@ -22,21 +40,30 @@ interface PromptGuardConfig {
 // Request / response shapes
 // ---------------------------------------------------------------------------
 
-interface Message {
-  role: "system" | "user" | "assistant"
+export interface Message {
+  role: "system" | "user" | "assistant" | "tool" | "function"
   content: string
 }
 
-interface ChatCompletionRequest {
+export interface ChatCompletionRequest {
   model: string
   messages: Message[]
   temperature?: number
+  /** Maximum tokens to generate. Serialized to the wire as `max_tokens`. */
   maxTokens?: number
-  stream?: boolean
+  /**
+   * OpenAI-compatible escape hatch: any additional keys (e.g. `top_p`,
+   * `frequency_penalty`, `stop`, `tools`) are forwarded verbatim to the proxy.
+   * Because these keys are not type-checked, a misspelled parameter is silently
+   * passed through rather than flagged at compile time — double-check the
+   * spelling of options not listed above. (`stream: true` is the one key
+   * rejected: the client parses a single JSON response body, so it throws at
+   * runtime instead of forwarding.)
+   */
   [key: string]: unknown
 }
 
-interface ChatCompletionResponse {
+export interface ChatCompletionResponse {
   id: string
   object: string
   created: number
@@ -53,15 +80,23 @@ interface ChatCompletionResponse {
   }
 }
 
-interface CompletionRequest {
+export interface CompletionRequest {
   model: string
   prompt: string
   temperature?: number
+  /** Maximum tokens to generate. Serialized to the wire as `max_tokens`. */
   maxTokens?: number
+  /**
+   * OpenAI-compatible escape hatch: any additional keys are forwarded verbatim
+   * to the proxy. Because these keys are not type-checked, a misspelled
+   * parameter is silently passed through rather than flagged at compile time.
+   * (`stream: true` is rejected at runtime — the client parses a single JSON
+   * response body.)
+   */
   [key: string]: unknown
 }
 
-interface CompletionResponse {
+export interface CompletionResponse {
   id: string
   object: string
   created: number
@@ -78,13 +113,19 @@ interface CompletionResponse {
   }
 }
 
-interface EmbeddingRequest {
+export interface EmbeddingRequest {
   model: string
   input: string | string[]
+  /**
+   * OpenAI-compatible escape hatch: any additional keys (e.g. `dimensions`,
+   * `encoding_format`, `user`) are forwarded verbatim to the proxy. Because
+   * these keys are not type-checked, a misspelled parameter is silently passed
+   * through rather than flagged at compile time.
+   */
   [key: string]: unknown
 }
 
-interface EmbeddingResponse {
+export interface EmbeddingResponse {
   object: string
   data: Array<{
     object: string
@@ -98,7 +139,7 @@ interface EmbeddingResponse {
   }
 }
 
-interface SecurityScanResult {
+export interface SecurityScanResult {
   blocked: boolean
   decision: "allow" | "block" | "redact"
   reason?: string
@@ -106,49 +147,57 @@ interface SecurityScanResult {
   confidence?: number
 }
 
-interface RedactResult {
+export interface RedactResult {
   original: string
   redacted: string
   piiFound: string[]
 }
 
-interface ScrapeResult {
+export interface ScrapeResult {
   url: string
   status: "safe" | "blocked"
   content: string
-  threats_detected: string[]
+  /** Normalized from the wire field `threats_detected`. */
+  threatsDetected: string[]
   message?: string
 }
 
-interface ToolValidationResult {
+export interface ToolValidationResult {
   allowed: boolean
-  risk_score: number
-  risk_level: string
+  /** Normalized from the wire field `risk_score`. */
+  riskScore: number
+  /** Normalized from the wire field `risk_level`. */
+  riskLevel: string
   reason: string
   warnings: string[]
-  blocked_reasons: string[]
+  /** Normalized from the wire field `blocked_reasons`. */
+  blockedReasons: string[]
 }
 
-interface RedTeamTestResult {
-  test_name: string
+export interface RedTeamTestResult {
+  /** Normalized from the wire field `test_name`. */
+  testName: string
   prompt: string
   decision: string
   reason: string
-  threat_type?: string
+  /** Normalized from the wire field `threat_type`. */
+  threatType?: string
   confidence: number
   blocked: boolean
   details: Record<string, unknown>
 }
 
-interface RedTeamSummary {
-  total_tests: number
+export interface RedTeamSummary {
+  /** Normalized from the wire field `total_tests`. */
+  totalTests: number
   blocked: number
   allowed: number
-  block_rate: number
+  /** Normalized from the wire field `block_rate`. */
+  blockRate: number
   results: RedTeamTestResult[]
 }
 
-interface AutonomousRedTeamRequest {
+export interface AutonomousRedTeamRequest {
   budget?: number
   /** Target preset to attack (camelCase, preferred). */
   targetPreset?: string
@@ -160,28 +209,180 @@ interface AutonomousRedTeamRequest {
   enabled_detectors?: string[]
 }
 
-interface AutonomousRedTeamReport {
+export interface AutonomousRedTeamReport {
   grade: string
-  bypass_rate: number
-  total_attempts: number
-  bypasses_found: number
+  /** Normalized from the wire field `bypass_rate`. */
+  bypassRate: number
+  /** Normalized from the wire field `total_attempts`. */
+  totalAttempts: number
+  /** Normalized from the wire field `bypasses_found`. */
+  bypassesFound: number
   bypasses: Array<Record<string, unknown>>
   recommendations: string[]
 }
 
-interface IntelligenceStats {
+export interface IntelligenceStats {
+  /** Normalized from the wire field `total_patterns`. */
+  totalPatterns: number
+  /** Normalized from the wire field `by_category`. */
+  byCategory: Record<string, number>
+  /** Normalized from the wire field `by_severity`. */
+  bySeverity: Record<string, number>
+  /** Normalized from the wire field `recent_discoveries`. */
+  recentDiscoveries: number
+}
+
+// ---------------------------------------------------------------------------
+// Wire response shapes (internal) + camelCase normalizers
+// ---------------------------------------------------------------------------
+//
+// The server returns these bodies in snake_case. The SDK normalizes them to the
+// camelCase exported types above so response-field casing is consistent
+// SDK-wide (matching GuardDecision and SecurityScanResult). The wire format is
+// unchanged — only the SDK-facing DTO is camelCased.
+
+interface ScrapeResultWire {
+  url: string
+  status: "safe" | "blocked"
+  content: string
+  threats_detected?: string[]
+  message?: string
+}
+
+interface ToolValidationResultWire {
+  allowed: boolean
+  risk_score: number
+  risk_level: string
+  reason: string
+  warnings?: string[]
+  blocked_reasons?: string[]
+}
+
+interface RedTeamTestResultWire {
+  test_name: string
+  prompt: string
+  decision: string
+  reason: string
+  threat_type?: string
+  confidence: number
+  blocked: boolean
+  details?: Record<string, unknown>
+}
+
+interface RedTeamSummaryWire {
+  total_tests: number
+  blocked: number
+  allowed: number
+  block_rate: number
+  results?: RedTeamTestResultWire[]
+}
+
+interface AutonomousRedTeamReportWire {
+  grade: string
+  bypass_rate: number
+  total_attempts: number
+  bypasses_found: number
+  bypasses?: Array<Record<string, unknown>>
+  recommendations?: string[]
+}
+
+interface IntelligenceStatsWire {
   total_patterns: number
-  by_category: Record<string, number>
-  by_severity: Record<string, number>
+  by_category?: Record<string, number>
+  by_severity?: Record<string, number>
   recent_discoveries: number
+}
+
+function toScrapeResult(w: ScrapeResultWire): ScrapeResult {
+  return {
+    url: w.url,
+    status: w.status,
+    content: w.content,
+    threatsDetected: w.threats_detected ?? [],
+    message: w.message,
+  }
+}
+
+function toToolValidationResult(w: ToolValidationResultWire): ToolValidationResult {
+  return {
+    allowed: w.allowed,
+    riskScore: w.risk_score,
+    riskLevel: w.risk_level,
+    reason: w.reason,
+    warnings: w.warnings ?? [],
+    blockedReasons: w.blocked_reasons ?? [],
+  }
+}
+
+function toRedTeamTestResult(w: RedTeamTestResultWire): RedTeamTestResult {
+  return {
+    testName: w.test_name,
+    prompt: w.prompt,
+    decision: w.decision,
+    reason: w.reason,
+    threatType: w.threat_type,
+    confidence: w.confidence,
+    blocked: w.blocked,
+    details: w.details ?? {},
+  }
+}
+
+function toRedTeamSummary(w: RedTeamSummaryWire): RedTeamSummary {
+  return {
+    totalTests: w.total_tests,
+    blocked: w.blocked,
+    allowed: w.allowed,
+    blockRate: w.block_rate,
+    results: (w.results ?? []).map(toRedTeamTestResult),
+  }
+}
+
+function toAutonomousRedTeamReport(w: AutonomousRedTeamReportWire): AutonomousRedTeamReport {
+  return {
+    grade: w.grade,
+    bypassRate: w.bypass_rate,
+    totalAttempts: w.total_attempts,
+    bypassesFound: w.bypasses_found,
+    bypasses: w.bypasses ?? [],
+    recommendations: w.recommendations ?? [],
+  }
+}
+
+function toIntelligenceStats(w: IntelligenceStatsWire): IntelligenceStats {
+  return {
+    totalPatterns: w.total_patterns,
+    byCategory: w.by_category ?? {},
+    bySeverity: w.by_severity ?? {},
+    recentDiscoveries: w.recent_discoveries,
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Namespace classes
 // ---------------------------------------------------------------------------
 
-const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504])
 const PROXY_BASE_URL = `${DEFAULT_BASE_URL}/proxy`
+
+/**
+ * Serialize camelCase SDK params to the wire format the server expects
+ * (`maxTokens` → `max_tokens`), and reject options we cannot honor.
+ *
+ * Streaming is rejected explicitly: `request()` always parses the response
+ * as a single JSON body, so `stream: true` would hang or retry the JSON
+ * parse failure instead of streaming.
+ */
+function serializeCompletionParams(params: Record<string, unknown>): Record<string, unknown> {
+  if (params.stream === true) {
+    throw new PromptGuardError(
+      "streaming not yet supported by the PromptGuard proxy client — remove `stream: true`",
+      "streaming_not_supported",
+      400,
+    )
+  }
+  const { maxTokens, ...rest } = params
+  if (maxTokens !== undefined) rest.max_tokens = maxTokens
+  return rest
+}
 
 /**
  * Ensure the proxy base URL's path ends with `/proxy`.
@@ -201,7 +402,11 @@ export function ensureProxySuffix(baseUrl: string): string {
   } catch {
     // Not a parseable absolute URL — fall back to safe string handling so we
     // never throw from the constructor on an unusual but intended value.
-    const trimmed = baseUrl.replace(/\/+$/, "")
+    // Strip trailing slashes with a linear scan rather than a `/\/+$/` regex
+    // (which CodeQL flags as polynomial ReDoS on many-slash input).
+    let end = baseUrl.length
+    while (end > 0 && baseUrl.charCodeAt(end - 1) === 47 /* "/" */) end--
+    const trimmed = baseUrl.slice(0, end)
     return trimmed.split("/").pop() === "proxy" ? trimmed : `${trimmed}/proxy`
   }
   // Strip a single trailing slash from the path so we operate on segments.
@@ -211,13 +416,39 @@ export function ensureProxySuffix(baseUrl: string): string {
   return url.toString()
 }
 
+/**
+ * Join an endpoint path onto the configured base URL.
+ *
+ * Plain string concatenation broke base URLs carrying a query string or
+ * fragment (which `ensureProxySuffix` deliberately preserves): the endpoint
+ * path landed inside the query/fragment value and every namespaced call
+ * routed to the wrong endpoint. Splice the path onto the URL's pathname so
+ * the query/fragment stay where they belong.
+ */
+export function buildRequestUrl(baseUrl: string, path: string): string {
+  let url: URL
+  try {
+    url = new URL(baseUrl)
+  } catch {
+    // Not a parseable absolute URL — keep the historical concat behavior.
+    return `${baseUrl}${path}`
+  }
+  const basePath = url.pathname.endsWith("/") ? url.pathname.slice(0, -1) : url.pathname
+  url.pathname = `${basePath}${path}`
+  return url.toString()
+}
+
 class ChatCompletions {
   private client: PromptGuard
   constructor(client: PromptGuard) {
     this.client = client
   }
   async create(params: ChatCompletionRequest): Promise<ChatCompletionResponse> {
-    return this.client.request<ChatCompletionResponse>("POST", "/chat/completions", params)
+    return this.client.request<ChatCompletionResponse>(
+      "POST",
+      "/chat/completions",
+      serializeCompletionParams(params),
+    )
   }
 }
 
@@ -234,7 +465,11 @@ class Completions {
     this.client = client
   }
   async create(params: CompletionRequest): Promise<CompletionResponse> {
-    return this.client.request<CompletionResponse>("POST", "/completions", params)
+    return this.client.request<CompletionResponse>(
+      "POST",
+      "/completions",
+      serializeCompletionParams(params),
+    )
   }
 }
 
@@ -273,15 +508,22 @@ class Scrape {
     url: string,
     options?: { renderJs?: boolean; extractText?: boolean; timeout?: number },
   ): Promise<ScrapeResult> {
-    return this.client.request<ScrapeResult>("POST", "/scrape", {
+    const raw = await this.client.request<ScrapeResultWire>("POST", "/scrape", {
       url,
       render_js: options?.renderJs ?? false,
       extract_text: options?.extractText ?? true,
       timeout: options?.timeout ?? 30,
     })
+    return toScrapeResult(raw)
   }
-  async batch(urls: string[], options?: Record<string, unknown>): Promise<{ job_id: string }> {
-    return this.client.request("POST", "/scrape/batch", { urls, ...options })
+  async batch(urls: string[], options?: Record<string, unknown>): Promise<{ jobId: string }> {
+    // Normalize the wire field `job_id` → `jobId` so the scrape namespace is
+    // camelCase throughout (consistent with `url()`'s ScrapeResult).
+    const raw = await this.client.request<{ job_id: string }>("POST", "/scrape/batch", {
+      urls,
+      ...options,
+    })
+    return { jobId: raw.job_id }
   }
 }
 
@@ -296,15 +538,22 @@ class Agent {
     args: Record<string, unknown>,
     sessionId?: string,
   ): Promise<ToolValidationResult> {
-    return this.client.request<ToolValidationResult>("POST", "/agent/validate-tool", {
-      agent_id: agentId,
-      tool_name: toolName,
-      arguments: args,
-      session_id: sessionId,
-    })
+    const raw = await this.client.request<ToolValidationResultWire>(
+      "POST",
+      "/agent/validate-tool",
+      {
+        agent_id: agentId,
+        tool_name: toolName,
+        arguments: args,
+        session_id: sessionId,
+      },
+    )
+    return toToolValidationResult(raw)
   }
   async stats(agentId: string): Promise<Record<string, unknown>> {
-    return this.client.request("GET", `/agent/${agentId}/stats`)
+    // Encode so an id containing "/", "?", "#", or ".." cannot reroute the
+    // authenticated request to a different endpoint.
+    return this.client.request("GET", `/agent/${encodeURIComponent(agentId)}/stats`)
   }
 }
 
@@ -319,33 +568,53 @@ class RedTeam {
     return this.client.request("GET", `${this.base}/tests`)
   }
   async runTest(testName: string, targetPreset = "default"): Promise<RedTeamTestResult> {
-    return this.client.request<RedTeamTestResult>("POST", `${this.base}/test/${testName}`, {
-      target_preset: targetPreset,
-    })
+    const raw = await this.client.request<RedTeamTestResultWire>(
+      "POST",
+      `${this.base}/test/${encodeURIComponent(testName)}`,
+      {
+        target_preset: targetPreset,
+      },
+    )
+    return toRedTeamTestResult(raw)
   }
   async runAll(targetPreset = "default"): Promise<RedTeamSummary> {
-    return this.client.request<RedTeamSummary>("POST", `${this.base}/test-all`, {
+    const raw = await this.client.request<RedTeamSummaryWire>("POST", `${this.base}/test-all`, {
       target_preset: targetPreset,
     })
+    return toRedTeamSummary(raw)
   }
   async runCustom(prompt: string, targetPreset = "default"): Promise<RedTeamTestResult> {
-    return this.client.request<RedTeamTestResult>("POST", `${this.base}/test-custom`, {
-      custom_prompt: prompt,
-      target_preset: targetPreset,
-    })
+    const raw = await this.client.request<RedTeamTestResultWire>(
+      "POST",
+      `${this.base}/test-custom`,
+      {
+        custom_prompt: prompt,
+        target_preset: targetPreset,
+      },
+    )
+    return toRedTeamTestResult(raw)
   }
   async runAutonomous(options?: AutonomousRedTeamRequest): Promise<AutonomousRedTeamReport> {
     // Accept camelCase (preferred) with snake_case aliases for back-compat.
     const targetPreset = options?.targetPreset ?? options?.target_preset ?? "default"
     const enabledDetectors = options?.enabledDetectors ?? options?.enabled_detectors
-    return this.client.request<AutonomousRedTeamReport>("POST", `${this.base}/autonomous`, {
-      budget: options?.budget ?? 100,
-      target_preset: targetPreset,
-      ...(enabledDetectors && { enabled_detectors: enabledDetectors }),
-    })
+    const raw = await this.client.request<AutonomousRedTeamReportWire>(
+      "POST",
+      `${this.base}/autonomous`,
+      {
+        budget: options?.budget ?? 100,
+        target_preset: targetPreset,
+        ...(enabledDetectors && { enabled_detectors: enabledDetectors }),
+      },
+    )
+    return toAutonomousRedTeamReport(raw)
   }
   async intelligenceStats(): Promise<IntelligenceStats> {
-    return this.client.request<IntelligenceStats>("GET", `${this.base}/intelligence/stats`)
+    const raw = await this.client.request<IntelligenceStatsWire>(
+      "GET",
+      `${this.base}/intelligence/stats`,
+    )
+    return toIntelligenceStats(raw)
   }
 }
 
@@ -387,7 +656,7 @@ export class PromptGuard {
   }
 
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const url = `${this.config.baseUrl}${path}`
+    const url = buildRequestUrl(this.config.baseUrl, path)
     let lastError: Error | undefined
 
     for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
@@ -405,7 +674,14 @@ export class PromptGuard {
         })
 
         if (RETRYABLE_STATUS_CODES.has(response.status) && attempt < this.config.maxRetries) {
-          await new Promise((r) => setTimeout(r, this.config.retryDelay * 2 ** attempt))
+          // Consume the body so undici can release the connection back to
+          // the keep-alive pool instead of leaking it per retried attempt.
+          await response.body?.cancel().catch(() => {})
+          // Honor Retry-After when the server provides one; otherwise use
+          // exponential backoff. Add small jitter to avoid thundering herds.
+          const retryAfterMs = parseRetryAfterMs(response.headers?.get?.("retry-after"))
+          const delay = computeRetryDelayMs(this.config.retryDelay, attempt, retryAfterMs)
+          await new Promise((r) => setTimeout(r, delay))
           continue
         }
 
@@ -424,7 +700,9 @@ export class PromptGuard {
           const err = errorBody.error
           throw new PromptGuardError(
             err?.message || "Request failed",
-            err?.code || "UNKNOWN",
+            // Server-forwarded codes pass through verbatim; SDK-minted codes use
+            // lower_snake_case (matching `missing_api_key` and the server style).
+            err?.code || "unknown",
             response.status,
             {
               type: err?.type,
@@ -436,17 +714,43 @@ export class PromptGuard {
           )
         }
 
-        return response.json() as Promise<T>
+        try {
+          return (await response.json()) as T
+        } catch {
+          // A 2xx with an unparseable body may be transient (truncation), so
+          // it stays retryable — but it must never surface as a raw
+          // SyntaxError. Wrap it so the terminal failure is a typed error.
+          lastError = new PromptGuardError(
+            "invalid JSON in response body",
+            "invalid_response_body",
+            response.status,
+          )
+          if (attempt < this.config.maxRetries) {
+            await new Promise((r) =>
+              setTimeout(r, computeRetryDelayMs(this.config.retryDelay, attempt)),
+            )
+            continue
+          }
+          throw lastError
+        }
       } catch (err) {
         if (err instanceof PromptGuardError) throw err
+        // Deterministic pre-flight failures (circular JSON body, invalid
+        // header value) can never succeed on retry — surface them
+        // immediately instead of burning the full backoff schedule.
+        if (!isRetryableNetworkError(err)) throw err
         lastError = err as Error
         if (attempt < this.config.maxRetries) {
-          await new Promise((r) => setTimeout(r, this.config.retryDelay * 2 ** attempt))
+          // Mirror the status-code retry path: exponential backoff plus
+          // jitter so concurrent clients don't retry in lockstep.
+          await new Promise((r) =>
+            setTimeout(r, computeRetryDelayMs(this.config.retryDelay, attempt)),
+          )
         }
       }
     }
 
-    throw lastError ?? new PromptGuardError("Max retries exceeded", "MAX_RETRIES", 0)
+    throw lastError ?? new PromptGuardError("Max retries exceeded", "max_retries", 0)
   }
 }
 
@@ -455,6 +759,12 @@ export class PromptGuard {
 // ---------------------------------------------------------------------------
 
 export class PromptGuardError extends Error {
+  /**
+   * Machine-readable error code. Server-forwarded codes pass through verbatim
+   * (their own casing). Codes minted by the SDK itself use lower_snake_case:
+   * `missing_api_key`, `streaming_not_supported`, `invalid_response_body`,
+   * `max_retries`, and the fallback `unknown`.
+   */
   code: string
   statusCode: number
   errorType?: string
@@ -475,7 +785,9 @@ export class PromptGuardError extends Error {
       requestsLimit?: number
     },
   ) {
-    super(`${code}: ${message}`)
+    // Keep the human-readable message clean; the machine-readable `code` is
+    // exposed as a structured field (not prefixed onto `.message`).
+    super(message)
     this.name = "PromptGuardError"
     this.code = code
     this.statusCode = statusCode
@@ -486,5 +798,3 @@ export class PromptGuardError extends Error {
     this.requestsLimit = extra?.requestsLimit
   }
 }
-
-export default PromptGuard

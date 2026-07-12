@@ -2,7 +2,7 @@
  * Tests for PromptGuard client -- namespace parity, new APIs, retry logic.
  */
 
-import { ensureProxySuffix } from "../src/client"
+import { buildRequestUrl, ensureProxySuffix } from "../src/client"
 import { PromptGuard, PromptGuardError } from "../src/index"
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -145,6 +145,64 @@ describe("Embeddings.create", () => {
   })
 })
 
+// ── Wire serialization ───────────────────────────────────────────────
+
+describe("Completion param serialization", () => {
+  test("chat: maxTokens is sent as max_tokens", async () => {
+    global.fetch = mockFetchOk({ id: "c1", choices: [] })
+    const pg = makeClient()
+
+    await pg.chat.completions.create({
+      model: "gpt-5-nano",
+      messages: [{ role: "user", content: "hi" }],
+      maxTokens: 128,
+    })
+
+    const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body)
+    expect(body.max_tokens).toBe(128)
+    expect(body.maxTokens).toBeUndefined()
+  })
+
+  test("completions: maxTokens is sent as max_tokens", async () => {
+    global.fetch = mockFetchOk({ id: "c2", choices: [] })
+    const pg = makeClient()
+
+    await pg.completions.create({ model: "gpt-5-nano", prompt: "hi", maxTokens: 64 })
+
+    const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body)
+    expect(body.max_tokens).toBe(64)
+    expect(body.maxTokens).toBeUndefined()
+  })
+
+  test("maxTokens omitted stays omitted", async () => {
+    global.fetch = mockFetchOk({ id: "c3", choices: [] })
+    const pg = makeClient()
+
+    await pg.chat.completions.create({
+      model: "gpt-5-nano",
+      messages: [{ role: "user", content: "hi" }],
+    })
+
+    const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body)
+    expect("max_tokens" in body).toBe(false)
+  })
+
+  test("stream: true is rejected with a clear error", async () => {
+    global.fetch = mockFetchOk()
+    const pg = makeClient()
+
+    await expect(
+      pg.chat.completions.create({
+        model: "gpt-5-nano",
+        messages: [{ role: "user", content: "hi" }],
+        stream: true,
+      }),
+    ).rejects.toThrow("streaming not yet supported")
+    // The request must be rejected before any network call happens.
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+})
+
 // ── Retry logic ──────────────────────────────────────────────────────
 
 describe("Retry logic", () => {
@@ -191,6 +249,153 @@ describe("Retry logic", () => {
     expect(global.fetch).toHaveBeenCalledTimes(3)
   })
 
+  test("consumes the response body before retrying (keep-alive hygiene)", async () => {
+    const cancel = jest.fn().mockResolvedValue(undefined)
+    let calls = 0
+    global.fetch = jest.fn().mockImplementation(() => {
+      calls++
+      if (calls === 1) {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          body: { cancel },
+          json: () => Promise.resolve({}),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+    })
+    const pg = makeClient({ maxRetries: 1, retryDelay: 1 })
+
+    await pg.request("POST", "/test")
+    expect(cancel).toHaveBeenCalledTimes(1)
+  })
+
+  test("honors Retry-After header (delta-seconds)", async () => {
+    const timeoutSpy = jest.spyOn(global, "setTimeout")
+    let calls = 0
+    global.fetch = jest.fn().mockImplementation(() => {
+      calls++
+      if (calls === 1) {
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          headers: { get: (name: string) => (name === "retry-after" ? "0.02" : null) },
+          json: () => Promise.resolve({}),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+    })
+    const pg = makeClient({ maxRetries: 1, retryDelay: 1000 })
+
+    const result = await pg.request("POST", "/test")
+    expect(result).toEqual({ ok: true })
+    // Retry-After of 0.02s (=20ms) overrides the 1000ms base backoff:
+    // the scheduled delay must be 20ms plus at most 25% of backoff jitter.
+    const delays = timeoutSpy.mock.calls.map((c) => c[1] as number)
+    const retryDelay = Math.max(...delays)
+    expect(retryDelay).toBeGreaterThanOrEqual(20)
+    expect(retryDelay).toBeLessThan(20 + 0.25 * 1000 + 1)
+    timeoutSpy.mockRestore()
+  })
+
+  test("clamps Retry-After to 60 seconds", async () => {
+    // Fire timers immediately so the clamped 60s delay doesn't slow the
+    // suite, while still capturing the scheduled delay values.
+    const timeoutSpy = jest.spyOn(global, "setTimeout").mockImplementation(((cb: () => void) => {
+      cb()
+      return 0 as unknown as NodeJS.Timeout
+    }) as never)
+    let calls = 0
+    global.fetch = jest.fn().mockImplementation(() => {
+      calls++
+      if (calls === 1) {
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          // A hostile/misconfigured server asking for a 1-hour delay.
+          headers: { get: (name: string) => (name === "retry-after" ? "3600" : null) },
+          json: () => Promise.resolve({}),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+    })
+    try {
+      const pg = makeClient({ maxRetries: 1, retryDelay: 1 })
+      const result = await pg.request("POST", "/test")
+      expect(result).toEqual({ ok: true })
+      const delays = timeoutSpy.mock.calls.map((c) => c[1] as number)
+      const retryDelay = Math.max(...delays)
+      // Clamped to 60s (+ up to 25% of the 1ms base backoff jitter).
+      expect(retryDelay).toBeGreaterThanOrEqual(60_000)
+      expect(retryDelay).toBeLessThanOrEqual(60_000 + 1)
+    } finally {
+      timeoutSpy.mockRestore()
+    }
+  })
+
+  test("terminal 2xx JSON-parse failure surfaces as PromptGuardError, not SyntaxError", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError("Unexpected token < in JSON")),
+    })
+    const pg = makeClient({ maxRetries: 0 })
+
+    const err = await pg
+      .request("POST", "/test")
+      .then(() => null)
+      .catch((e) => e)
+    expect(err).toBeInstanceOf(PromptGuardError)
+    expect((err as PromptGuardError).code).toBe("invalid_response_body")
+    expect((err as PromptGuardError).statusCode).toBe(200)
+  })
+
+  test("2xx JSON-parse failure is retried before failing", async () => {
+    let calls = 0
+    global.fetch = jest.fn().mockImplementation(() => {
+      calls++
+      if (calls === 1) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.reject(new SyntaxError("truncated body")),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) })
+    })
+    const pg = makeClient({ maxRetries: 1, retryDelay: 1 })
+
+    const result = await pg.request("POST", "/test")
+    expect(result).toEqual({ ok: true })
+    expect(global.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  test("does not retry deterministic non-network errors", async () => {
+    global.fetch = jest.fn().mockImplementation(() => {
+      // e.g. an invalid header value — undici throws before dispatch,
+      // without the "fetch failed" message or a cause.
+      throw new TypeError("invalid header value")
+    })
+    const pg = makeClient({ maxRetries: 3, retryDelay: 1 })
+
+    await expect(pg.request("POST", "/test")).rejects.toThrow("invalid header value")
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  test("request URL keeps a base-URL query string after the endpoint path", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ok: true }),
+    })
+    const pg = new PromptGuard({ apiKey: "pg_test", baseUrl: "https://x.com/api/v1?token=abc" })
+    await pg.request("POST", "/chat/completions")
+    expect(global.fetch).toHaveBeenCalledWith(
+      "https://x.com/api/v1/proxy/chat/completions?token=abc",
+      expect.anything(),
+    )
+  })
+
   test("retries on network error", async () => {
     let calls = 0
     global.fetch = jest.fn().mockImplementation(() => {
@@ -220,20 +425,37 @@ describe("SDK headers", () => {
 
     const headers = (global.fetch as jest.Mock).mock.calls[0][1].headers
     expect(headers["X-PromptGuard-SDK"]).toBe("node")
-    expect(headers["X-PromptGuard-Version"]).toBe("1.8.0")
+    // src/version.ts is generated from package.json (prebuild); they must agree.
+    expect(headers["X-PromptGuard-Version"]).toBe(require("../package.json").version)
   })
 })
 
 // ── Validation ───────────────────────────────────────────────────────
 
 describe("Validation", () => {
-  test("throws without API key", () => {
+  test("throws a typed PromptGuardError (code=missing_api_key) without API key", () => {
     const originalEnv = process.env.PROMPTGUARD_API_KEY
-    process.env.PROMPTGUARD_API_KEY = undefined
+    // `process.env.X = undefined` would set the literal string "undefined";
+    // the variable must actually be removed for the test to be meaningful.
+    Reflect.deleteProperty(process.env, "PROMPTGUARD_API_KEY")
 
-    expect(() => new PromptGuard({ apiKey: "" })).toThrow("API key required")
-
-    if (originalEnv !== undefined) process.env.PROMPTGUARD_API_KEY = originalEnv
+    try {
+      // Message is preserved verbatim...
+      expect(() => new PromptGuard({ apiKey: "" })).toThrow("API key required")
+      // ...but it is a typed error so callers can branch structurally instead
+      // of string-matching the message.
+      let caught: unknown
+      try {
+        new PromptGuard({ apiKey: "" })
+      } catch (err) {
+        caught = err
+      }
+      expect(caught).toBeInstanceOf(PromptGuardError)
+      expect((caught as PromptGuardError).code).toBe("missing_api_key")
+    } finally {
+      if (originalEnv !== undefined) process.env.PROMPTGUARD_API_KEY = originalEnv
+      else Reflect.deleteProperty(process.env, "PROMPTGUARD_API_KEY")
+    }
   })
 })
 
@@ -285,6 +507,30 @@ describe("ensureProxySuffix", () => {
     expect(ensureProxySuffix("https://api.promptguard.co/api/v1/myproxy")).toBe(
       "https://api.promptguard.co/api/v1/myproxy/proxy",
     )
+  })
+})
+
+describe("buildRequestUrl", () => {
+  test("appends the endpoint path to a plain base URL", () => {
+    expect(buildRequestUrl("https://api.promptguard.co/api/v1/proxy", "/chat/completions")).toBe(
+      "https://api.promptguard.co/api/v1/proxy/chat/completions",
+    )
+  })
+
+  test("keeps a query string after the endpoint path", () => {
+    expect(buildRequestUrl("https://x.com/api/v1/proxy?token=abc", "/chat/completions")).toBe(
+      "https://x.com/api/v1/proxy/chat/completions?token=abc",
+    )
+  })
+
+  test("keeps a fragment after the endpoint path", () => {
+    expect(buildRequestUrl("https://x.com/api/v1/proxy#frag", "/embeddings")).toBe(
+      "https://x.com/api/v1/proxy/embeddings#frag",
+    )
+  })
+
+  test("falls back to concatenation for unparseable base URLs", () => {
+    expect(buildRequestUrl("not a url", "/x")).toBe("not a url/x")
   })
 })
 

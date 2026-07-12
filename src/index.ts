@@ -28,15 +28,36 @@
  */
 
 // Auto-instrumentation
-export { type InitOptions, init, shutdown } from "./auto"
+export { getAppliedPatches, type InitOptions, init, shutdown } from "./auto"
+// Proxy client types (for `import type { ... } from 'promptguard-sdk'`)
+export type {
+  AutonomousRedTeamReport,
+  AutonomousRedTeamRequest,
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  CompletionRequest,
+  CompletionResponse,
+  EmbeddingRequest,
+  EmbeddingResponse,
+  IntelligenceStats,
+  Message,
+  PromptGuardConfig,
+  RedactResult,
+  RedTeamSummary,
+  RedTeamTestResult,
+  ScrapeResult,
+  SecurityScanResult,
+  ToolValidationResult,
+} from "./client"
 // Proxy client
-export { default, PromptGuard, PromptGuardError } from "./client"
+export { PromptGuard, PromptGuardError } from "./client"
 // Guard client (standalone scanning)
 export {
   GuardApiError,
   GuardClient,
   type GuardClientConfig,
   type GuardContext,
+  type GuardContextWire,
   GuardDecision,
   type GuardMessage,
   type GuardRequestBody,

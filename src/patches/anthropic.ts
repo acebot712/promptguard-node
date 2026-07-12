@@ -16,21 +16,33 @@ let patched = false
 // Message conversion
 // ---------------------------------------------------------------------------
 
+/**
+ * Flatten an Anthropic `system` param (string or content-block array) into
+ * guard-message text. Returns `null` when no system guard-message would be
+ * emitted (absent, or an array with no text blocks) — the single source of
+ * truth for the redaction index offset in {@link applyRedactionToArgs}.
+ */
+export function systemToGuardContent(system: unknown): string | null {
+  if (!system) return null
+  if (typeof system === "string") return system
+  if (Array.isArray(system)) {
+    const parts: string[] = []
+    for (const block of system) {
+      if (typeof block === "object" && block?.type === "text") {
+        parts.push(block.text ?? "")
+      }
+    }
+    if (parts.length) return parts.join("\n")
+  }
+  return null
+}
+
 export function messagesToGuardFormat(messages: unknown[], system?: unknown): GuardMessage[] {
   const result: GuardMessage[] = []
 
-  if (system) {
-    if (typeof system === "string") {
-      result.push({ role: "system", content: system })
-    } else if (Array.isArray(system)) {
-      const parts: string[] = []
-      for (const block of system) {
-        if (typeof block === "object" && block?.type === "text") {
-          parts.push(block.text ?? "")
-        }
-      }
-      if (parts.length) result.push({ role: "system", content: parts.join("\n") })
-    }
+  const systemContent = systemToGuardContent(system)
+  if (systemContent !== null) {
+    result.push({ role: "system", content: systemContent })
   }
 
   if (!messages) return result
@@ -76,6 +88,50 @@ export function extractResponseContent(response: unknown): string | null {
   return null
 }
 
+/**
+ * Map redacted guard messages back onto Anthropic call args.
+ *
+ * The redaction offset is computed from whether a system guard-message was
+ * actually emitted by {@link messagesToGuardFormat} (via
+ * {@link systemToGuardContent}) — not merely from `system` being present —
+ * so an array system with no text blocks does not shift indices.
+ */
+export function applyRedactionToArgs(
+  args: unknown[],
+  redactedMessages: GuardMessage[],
+): unknown[] | null {
+  const params = (args[0] ?? {}) as Record<string, unknown>
+  const messages = params.messages as unknown[] | undefined
+  if (!Array.isArray(messages)) return null
+
+  const systemEmitted = systemToGuardContent(params.system) !== null
+  const offset = systemEmitted ? 1 : 0
+
+  const newParams = { ...params }
+  if (systemEmitted && redactedMessages[0]) {
+    // Preserve the original shape: content-block array stays an array.
+    newParams.system = Array.isArray(params.system)
+      ? [{ type: "text", text: redactedMessages[0].content }]
+      : redactedMessages[0].content
+  }
+  // messagesToGuardFormat skips falsy entries, so track the guard index
+  // separately from the array position to keep redactions aligned.
+  let guardIdx = offset
+  newParams.messages = messages.map((msg: unknown) => {
+    if (!msg) return msg
+    const r = redactedMessages[guardIdx++]
+    if (r && typeof msg === "object") {
+      const m = msg as Record<string, unknown>
+      // Preserve the multimodal shape: array content is rebuilt as a text
+      // block rather than collapsed to a bare string.
+      const content = Array.isArray(m.content) ? [{ type: "text", text: r.content }] : r.content
+      return { ...m, content }
+    }
+    return msg
+  })
+  return [newParams, ...args.slice(1)]
+}
+
 // ---------------------------------------------------------------------------
 // Apply / revert
 // ---------------------------------------------------------------------------
@@ -106,25 +162,7 @@ export function apply(): boolean {
       }
     },
     extractResponseText: (response) => extractResponseContent(response),
-    applyRedaction: (args, redactedMessages) => {
-      const params = (args[0] ?? {}) as Record<string, unknown>
-      const messages = params.messages as unknown[]
-      const hasSystem = params.system != null
-      const offset = hasSystem ? 1 : 0
-
-      const newParams = { ...params }
-      if (hasSystem && redactedMessages[0]) {
-        newParams.system = redactedMessages[0].content
-      }
-      newParams.messages = messages.map((msg: unknown, i: number) => {
-        const idx = i + offset
-        if (idx < redactedMessages.length) {
-          return { ...(msg as Record<string, unknown>), content: redactedMessages[idx].content }
-        }
-        return msg
-      })
-      return [newParams, ...args.slice(1)]
-    },
+    applyRedaction: applyRedactionToArgs,
   })
 
   patched = true

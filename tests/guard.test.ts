@@ -1,10 +1,13 @@
 import {
   GuardApiError,
   GuardClient,
+  type GuardContext,
   GuardDecision,
   PromptGuardBlockedError,
   safeErrorLabel,
+  serializeGuardContext,
 } from "../src/guard"
+import { PromptGuardCallbackHandler } from "../src/integrations/langchain"
 
 // ---------------------------------------------------------------------------
 // GuardDecision
@@ -56,14 +59,27 @@ describe("GuardDecision", () => {
     expect(d.redactedMessages?.[0].content).toBe("My SSN is [REDACTED]")
   })
 
-  test("defaults for missing fields", () => {
-    const d = new GuardDecision({})
+  test("defaults for missing optional fields", () => {
+    const d = new GuardDecision({ decision: "allow" })
     expect(d.decision).toBe("allow")
     expect(d.eventId).toBe("")
     expect(d.confidence).toBe(0)
     expect(d.threatType).toBeUndefined()
     expect(d.threats).toEqual([])
     expect(d.latencyMs).toBe(0)
+  })
+
+  test("empty body throws instead of defaulting to allow", () => {
+    // A malformed/empty body must never silently become an "allow" —
+    // the caller's failOpen policy decides what happens.
+    expect(() => new GuardDecision({})).toThrow(GuardApiError)
+  })
+
+  test("invalid decision value throws GuardApiError", () => {
+    expect(() => new GuardDecision({ decision: "yolo" as unknown as "allow" })).toThrow(
+      GuardApiError,
+    )
+    expect(() => new GuardDecision({ decision: 42 as unknown as "allow" })).toThrow(GuardApiError)
   })
 })
 
@@ -196,7 +212,8 @@ describe("GuardClient", () => {
     const headers = (client as unknown as { headers: () => Record<string, string> }).headers()
     expect(headers["X-API-Key"]).toBe("pg_my_key")
     expect(headers["X-PromptGuard-SDK"]).toBe("node-auto")
-    expect(headers["X-PromptGuard-Version"]).toBe("1.8.0")
+    // src/version.ts is generated from package.json (prebuild); they must agree.
+    expect(headers["X-PromptGuard-Version"]).toBe(require("../package.json").version)
     expect(headers["Content-Type"]).toBe("application/json")
   })
 
@@ -221,7 +238,9 @@ describe("GuardClient", () => {
       text: async () => "Internal Server Error",
     })
 
-    const client = new GuardClient({ apiKey: "pg_test" })
+    // maxRetries: 0 — this test asserts the terminal 500 error shape, not the
+    // retry behavior (which is covered in "GuardClient retry" below).
+    const client = new GuardClient({ apiKey: "pg_test", maxRetries: 0 })
     await expect(client.scan([{ role: "user", content: "hello" }], "input")).rejects.toThrow(
       GuardApiError,
     )
@@ -250,5 +269,357 @@ describe("GuardClient", () => {
     expect(result.eventId).toBe("evt-ok")
 
     global.fetch = originalFetch
+  })
+
+  test("scan throws GuardApiError when a 2xx body is malformed JSON", async () => {
+    const originalFetch = global.fetch
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("Unexpected token < in JSON")
+      },
+    })
+
+    // maxRetries: 0 — asserts the terminal invalid-JSON error shape; retry of
+    // a transient malformed 2xx body is covered in "GuardClient retry" below.
+    const client = new GuardClient({ apiKey: "pg_test", maxRetries: 0 })
+    const err = await client
+      .scan([{ role: "user", content: "hello" }], "input")
+      .then(() => null)
+      .catch((e) => e)
+    expect(err).toBeInstanceOf(GuardApiError)
+    expect((err as GuardApiError).statusCode).toBe(200)
+    expect((err as GuardApiError).message).toContain("invalid JSON")
+
+    global.fetch = originalFetch
+  })
+
+  test("scan throws GuardApiError when a 2xx body has an invalid decision", async () => {
+    const originalFetch = global.fetch
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ totally: "unexpected" }),
+    })
+
+    const client = new GuardClient({ apiKey: "pg_test" })
+    await expect(client.scan([{ role: "user", content: "hello" }], "input")).rejects.toThrow(
+      GuardApiError,
+    )
+
+    global.fetch = originalFetch
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GuardContext camelCase -> snake_case wire normalization
+// ---------------------------------------------------------------------------
+
+describe("GuardContext serialization", () => {
+  test("camelCase fields normalize to the snake_case wire shape", () => {
+    const ctx: GuardContext = {
+      framework: "langchain",
+      chainName: "my-chain",
+      agentId: "agent-7",
+      sessionId: "sess-9",
+      toolCalls: [{ name: "lookup" }],
+      metadata: { component: "tool" },
+    }
+    expect(serializeGuardContext(ctx)).toEqual({
+      framework: "langchain",
+      chain_name: "my-chain",
+      agent_id: "agent-7",
+      session_id: "sess-9",
+      tool_calls: [{ name: "lookup" }],
+      metadata: { component: "tool" },
+    })
+  })
+
+  test("deprecated snake_case aliases still serialize to the same wire shape", () => {
+    const ctx: GuardContext = {
+      framework: "langchain",
+      chain_name: "my-chain",
+      agent_id: "agent-7",
+      session_id: "sess-9",
+      tool_calls: [{ name: "lookup" }],
+    }
+    expect(serializeGuardContext(ctx)).toEqual({
+      framework: "langchain",
+      chain_name: "my-chain",
+      agent_id: "agent-7",
+      session_id: "sess-9",
+      tool_calls: [{ name: "lookup" }],
+    })
+  })
+
+  test("camelCase wins over its deprecated snake_case alias", () => {
+    const ctx: GuardContext = {
+      chainName: "new",
+      chain_name: "old",
+      agentId: "new-agent",
+      agent_id: "old-agent",
+    }
+    expect(serializeGuardContext(ctx)).toEqual({
+      chain_name: "new",
+      agent_id: "new-agent",
+    })
+  })
+
+  test("omits undefined fields (no camelCase keys, no explicit undefined)", () => {
+    const wire = serializeGuardContext({ sessionId: "s" })
+    expect(wire).toEqual({ session_id: "s" })
+    expect(Object.keys(wire)).toEqual(["session_id"])
+  })
+
+  test("scan sends camelCase context as snake_case over the wire", async () => {
+    const originalFetch = global.fetch
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        decision: "allow",
+        event_id: "evt-ctx",
+        confidence: 0,
+        threats: [],
+        latency_ms: 1,
+      }),
+    })
+    global.fetch = fetchMock
+
+    const client = new GuardClient({ apiKey: "pg_test" })
+    await client.scan([{ role: "user", content: "hi" }], {
+      direction: "input",
+      context: { chainName: "c", agentId: "a", sessionId: "s", toolCalls: [{ name: "t" }] },
+    })
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body)
+    expect(body.context).toEqual({
+      chain_name: "c",
+      agent_id: "a",
+      session_id: "s",
+      tool_calls: [{ name: "t" }],
+    })
+    // The wire body must carry no camelCase keys.
+    expect(Object.keys(body.context)).not.toEqual(
+      expect.arrayContaining(["chainName", "agentId", "sessionId", "toolCalls"]),
+    )
+
+    global.fetch = originalFetch
+  })
+
+  test("scan sends deprecated snake_case context aliases unchanged over the wire", async () => {
+    const originalFetch = global.fetch
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        decision: "allow",
+        event_id: "evt-ctx2",
+        confidence: 0,
+        threats: [],
+        latency_ms: 1,
+      }),
+    })
+    global.fetch = fetchMock
+
+    const client = new GuardClient({ apiKey: "pg_test" })
+    await client.scan([{ role: "user", content: "hi" }], {
+      direction: "input",
+      context: { chain_name: "c", agent_id: "a", session_id: "s", tool_calls: [{ name: "t" }] },
+    })
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body)
+    expect(body.context).toEqual({
+      chain_name: "c",
+      agent_id: "a",
+      session_id: "s",
+      tool_calls: [{ name: "t" }],
+    })
+
+    global.fetch = originalFetch
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GuardClient retry logic (finding 2)
+// ---------------------------------------------------------------------------
+
+describe("GuardClient retry", () => {
+  const originalFetch = global.fetch
+  afterEach(() => {
+    global.fetch = originalFetch
+  })
+
+  const allowBody = {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      decision: "allow",
+      event_id: "evt-ok",
+      confidence: 0.02,
+      threats: [],
+      latency_ms: 1,
+    }),
+  }
+
+  const blockBody = {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      decision: "block",
+      event_id: "evt-block",
+      confidence: 0.95,
+      threat_type: "prompt_injection",
+      threats: [],
+      latency_ms: 1,
+    }),
+  }
+
+  // A retryable transient HTTP response (503) with the header/body surface the
+  // retry loop touches.
+  const transient503 = {
+    ok: false,
+    status: 503,
+    headers: { get: () => null },
+    text: async () => "temporarily unavailable",
+  }
+
+  test("retries a transient network failure, then succeeds", async () => {
+    const fetchMock = jest
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(allowBody)
+    global.fetch = fetchMock
+
+    const client = new GuardClient({ apiKey: "pg_test", maxRetries: 2, retryDelay: 1 })
+    const result = await client.scan([{ role: "user", content: "hello" }], "input")
+
+    expect(result.allowed).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  test("retries a 503, then succeeds", async () => {
+    const fetchMock = jest.fn().mockResolvedValueOnce(transient503).mockResolvedValueOnce(blockBody)
+    global.fetch = fetchMock
+
+    const client = new GuardClient({ apiKey: "pg_test", maxRetries: 2, retryDelay: 1 })
+    const result = await client.scan([{ role: "user", content: "attack" }], "input")
+
+    expect(result.blocked).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  test("exhausted retries surface a GuardApiError (network)", async () => {
+    const fetchMock = jest.fn().mockRejectedValue(new TypeError("fetch failed"))
+    global.fetch = fetchMock
+
+    const client = new GuardClient({ apiKey: "pg_test", maxRetries: 2, retryDelay: 1 })
+    await expect(client.scan([{ role: "user", content: "hi" }], "input")).rejects.toThrow(
+      GuardApiError,
+    )
+    // 1 initial attempt + 2 retries.
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  test("exhausted retries on 503 surface a GuardApiError with status", async () => {
+    const fetchMock = jest.fn().mockResolvedValue(transient503)
+    global.fetch = fetchMock
+
+    const client = new GuardClient({ apiKey: "pg_test", maxRetries: 1, retryDelay: 1 })
+    const err = await client
+      .scan([{ role: "user", content: "hi" }], "input")
+      .then(() => null)
+      .catch((e) => e)
+    expect(err).toBeInstanceOf(GuardApiError)
+    expect((err as GuardApiError).statusCode).toBe(503)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  test("maxRetries: 0 makes exactly one attempt (at-most-once)", async () => {
+    const fetchMock = jest.fn().mockResolvedValue(transient503)
+    global.fetch = fetchMock
+
+    const client = new GuardClient({ apiKey: "pg_test", maxRetries: 0 })
+    await expect(client.scan([{ role: "user", content: "hi" }], "input")).rejects.toThrow(
+      GuardApiError,
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test("does not retry a non-retryable 4xx", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      headers: { get: () => null },
+      text: async () => "bad request",
+    })
+    global.fetch = fetchMock
+
+    const client = new GuardClient({ apiKey: "pg_test", maxRetries: 3, retryDelay: 1 })
+    await expect(client.scan([{ role: "user", content: "hi" }], "input")).rejects.toThrow(
+      GuardApiError,
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test("a definitive block decision (2xx) is never retried", async () => {
+    // Enforcement invariant: a real decision is terminal — retries must not
+    // re-run it or turn it into anything else.
+    const fetchMock = jest.fn().mockResolvedValue(blockBody)
+    global.fetch = fetchMock
+
+    const client = new GuardClient({ apiKey: "pg_test", maxRetries: 3, retryDelay: 1 })
+    const result = await client.scan([{ role: "user", content: "attack" }], "input")
+    expect(result.blocked).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test("does not retry a deterministic (non-network) fetch error", async () => {
+    // A plain Error with no errno/cause is not a transient network failure —
+    // retrying just delays the inevitable GuardApiError.
+    const fetchMock = jest.fn().mockRejectedValue(new Error("invalid header value"))
+    global.fetch = fetchMock
+
+    const client = new GuardClient({ apiKey: "pg_test", maxRetries: 3, retryDelay: 1 })
+    await expect(client.scan([{ role: "user", content: "hi" }], "input")).rejects.toThrow(
+      GuardApiError,
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test("after exhausted retries, fail-open policy governs end-to-end", async () => {
+    // The retry loop does not change enforcement: once retries are exhausted a
+    // GuardApiError is thrown, and the caller's existing failOpen policy
+    // decides. With failOpen (default), the call proceeds unscanned.
+    const fetchMock = jest.fn().mockRejectedValue(new TypeError("fetch failed"))
+    global.fetch = fetchMock
+
+    const handler = new PromptGuardCallbackHandler({
+      apiKey: "pg_test",
+      maxRetries: 2,
+      retryDelay: 1,
+      failOpen: true,
+      silent: true,
+    })
+
+    // Fail-open: no throw despite the Guard API being unreachable.
+    await expect(handler.handleLLMStart({}, ["hello"], "run-fo")).resolves.toBeUndefined()
+    // 1 initial attempt + 2 retries before failing open.
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  test("after exhausted retries, fail-closed still blocks the call", async () => {
+    const fetchMock = jest.fn().mockRejectedValue(new TypeError("fetch failed"))
+    global.fetch = fetchMock
+
+    const handler = new PromptGuardCallbackHandler({
+      apiKey: "pg_test",
+      maxRetries: 1,
+      retryDelay: 1,
+      failOpen: false,
+      silent: true,
+    })
+
+    await expect(handler.handleLLMStart({}, ["hello"], "run-fc")).rejects.toThrow(GuardApiError)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

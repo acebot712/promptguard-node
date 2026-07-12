@@ -42,9 +42,61 @@ interface OpenAPISpec {
   }
 }
 
+/**
+ * Schema and property names are interpolated verbatim into the generated
+ * TypeScript, so they must be plain identifiers — anything else could break
+ * out of the declaration and inject code (enum values and descriptions are
+ * escaped/sanitized; names must be equally constrained). Fail generation
+ * loudly rather than emit a compromised file.
+ */
+const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+
+function assertValidIdentifier(name: string, kind: string): void {
+  if (!IDENTIFIER_RE.test(name)) {
+    throw new Error(
+      `${kind} ${JSON.stringify(name)} is not a valid TypeScript identifier — ` +
+        "refusing to generate (possible spec injection)",
+    )
+  }
+}
+
 function resolveRef(ref: string): string {
   const name = ref.split("/").pop() ?? ref
+  assertValidIdentifier(name, "Referenced schema name")
   return name
+}
+
+/**
+ * Escape an enum value for interpolation inside a double-quoted TS string
+ * literal — backslashes first, then quotes, so a `"` in a spec enum can't
+ * break out of the generated literal.
+ */
+function escapeStringLiteral(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+}
+
+/**
+ * Sanitize a spec description for interpolation into a block comment —
+ * strip the block-comment terminator sequence (asterisk-slash) so a
+ * description can't end the comment early and inject code into the
+ * generated file.
+ */
+function sanitizeComment(text: string): string {
+  return text.replace(/\*\//g, "")
+}
+
+/**
+ * The spec version is interpolated into the generated file's block-comment
+ * header, so it gets the same treatment as names and descriptions: strip
+ * the block-comment terminator, then require a plain semver-ish shape.
+ * Anything else (e.g. a version crafted to break out of the comment and
+ * inject code) falls back to "unknown".
+ */
+const VERSION_RE = /^[0-9A-Za-z.+-]+$/
+
+function sanitizeVersion(version: unknown): string {
+  const cleaned = sanitizeComment(String(version ?? "unknown"))
+  return VERSION_RE.test(cleaned) ? cleaned : "unknown"
 }
 
 function mapType(prop: SchemaProperty): string {
@@ -54,7 +106,7 @@ function mapType(prop: SchemaProperty): string {
     return types.join(" | ")
   }
   if (prop.enum) {
-    return prop.enum.map((v) => `"${v}"`).join(" | ")
+    return prop.enum.map((v) => `"${escapeStringLiteral(v)}"`).join(" | ")
   }
 
   switch (prop.type) {
@@ -75,14 +127,17 @@ function mapType(prop: SchemaProperty): string {
 }
 
 function generateInterface(name: string, schema: Schema): string {
+  assertValidIdentifier(name, "Schema name")
   const lines: string[] = []
 
   if (schema.description) {
-    lines.push(`/** ${schema.description} */`)
+    lines.push(`/** ${sanitizeComment(schema.description)} */`)
   }
 
   if (schema.enum) {
-    lines.push(`export type ${name} = ${schema.enum.map((v) => `"${v}"`).join(" | ")}`)
+    lines.push(
+      `export type ${name} = ${schema.enum.map((v) => `"${escapeStringLiteral(v)}"`).join(" | ")}`,
+    )
     lines.push("")
     return lines.join("\n")
   }
@@ -97,10 +152,11 @@ function generateInterface(name: string, schema: Schema): string {
 
   lines.push(`export interface ${name} {`)
   for (const [propName, prop] of Object.entries(schema.properties)) {
+    assertValidIdentifier(propName, "Property name")
     const optional = required.has(propName) ? "" : "?"
     const tsType = mapType(prop)
     if (prop.description) {
-      lines.push(`  /** ${prop.description} */`)
+      lines.push(`  /** ${sanitizeComment(prop.description)} */`)
     }
     lines.push(`  ${propName}${optional}: ${tsType}`)
   }
@@ -119,7 +175,7 @@ function main() {
 
   const spec: OpenAPISpec = JSON.parse(fs.readFileSync(specPath, "utf-8"))
   const schemas = spec.components?.schemas ?? {}
-  const version = spec.info?.version ?? "unknown"
+  const version = sanitizeVersion(spec.info?.version)
 
   const header = [
     "/**",

@@ -21,6 +21,13 @@ export function contentToGuardFormat(contents: unknown): GuardMessage[] {
     return [{ role: "user", content: contents }]
   }
 
+  // Request-object form: generateContent({ contents: [...] }). Recurse into
+  // the inner contents array instead of falling through to String(), which
+  // would scan "[object Object]" while the real prompt goes unscanned.
+  if (isRequestObject(contents)) {
+    return contentToGuardFormat((contents as Record<string, unknown>).contents)
+  }
+
   if (!Array.isArray(contents)) {
     return [{ role: "user", content: String(contents ?? "") }]
   }
@@ -40,6 +47,19 @@ export function contentToGuardFormat(contents: unknown): GuardMessage[] {
   }
 
   return result
+}
+
+/**
+ * Whether the value is the request-object form of `generateContent` args:
+ * an object (not an array) carrying a `contents` array.
+ */
+function isRequestObject(value: unknown): value is { contents: unknown[] } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Array.isArray((value as Record<string, unknown>).contents)
+  )
 }
 
 function extractTextFromParts(parts: unknown): string {
@@ -68,6 +88,43 @@ export function extractResponseText(response: unknown): string | null {
     // ignore
   }
   return null
+}
+
+/**
+ * Map redacted guard messages back onto `generateContent` args.
+ *
+ * {@link contentToGuardFormat} emits exactly one guard message per content
+ * item (or one for a bare string), so indices align 1:1. Returns `null` for
+ * shapes we cannot rewrite safely (escalated to block in enforce mode).
+ */
+export function applyRedactionToArgs(args: unknown[], redacted: GuardMessage[]): unknown[] | null {
+  const contents = args[0]
+
+  if (typeof contents === "string") {
+    return redacted[0] ? [redacted[0].content, ...args.slice(1)] : null
+  }
+
+  // Request-object form: redact the inner contents array and rebuild the
+  // wrapper object (mirrors contentToGuardFormat).
+  if (isRequestObject(contents)) {
+    const obj = contents as Record<string, unknown>
+    const inner = applyRedactionToArgs([obj.contents, ...args.slice(1)], redacted)
+    if (inner === null) return null
+    return [{ ...obj, contents: inner[0] }, ...args.slice(1)]
+  }
+
+  if (!Array.isArray(contents)) return null
+
+  const newContents = contents.map((item, i) => {
+    const r = redacted[i]
+    if (!r) return item
+    if (typeof item === "string") return r.content
+    if (item && typeof item === "object" && "parts" in (item as object)) {
+      return { ...(item as Record<string, unknown>), parts: [{ text: r.content }] }
+    }
+    return r.content
+  })
+  return [newContents, ...args.slice(1)]
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +158,7 @@ export function apply(): boolean {
       }
     },
     extractResponseText: (response) => extractResponseText(response),
+    applyRedaction: applyRedactionToArgs,
   })
 
   patched = true

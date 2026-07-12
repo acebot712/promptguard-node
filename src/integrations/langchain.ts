@@ -18,6 +18,7 @@
  */
 
 import {
+  GuardApiError,
   GuardClient,
   type GuardClientConfig,
   type GuardContext,
@@ -35,20 +36,89 @@ import { resolveCredentials } from "../resolve"
 
 export interface PromptGuardCallbackOptions extends GuardClientConfig {
   mode?: "enforce" | "monitor"
+  /**
+   * Also scan LLM/tool outputs (default: `false`, consistent with `init()`
+   * and the Vercel AI middleware). Enable explicitly if you want output
+   * scanning — every scan is a billable Guard API call.
+   */
   scanResponses?: boolean
   failOpen?: boolean
-  /** SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress logs. */
+  /**
+   * SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress logs.
+   * NOTE: this sets the **process-global** SDK log level (shared with `init()`
+   * and other integrations); the most recently constructed instance wins.
+   */
   logLevel?: LogLevel
   /** Convenience shorthand for `logLevel: "silent"`. */
   silent?: boolean
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Flatten LangChain message content to scannable text.
+ *
+ * Structured/multimodal content is a content-part array
+ * (`[{ type: "text", text }, { type: "image_url", ... }]`); `String()` on it
+ * would yield `"[object Object]"` and the real text would never be scanned.
+ * Mirrors the flattening in patches/openai.ts.
+ */
+function flattenMessageContent(content: unknown): string {
+  if (typeof content === "string") return content
+  if (Array.isArray(content)) {
+    const textParts: string[] = []
+    for (const part of content) {
+      if (typeof part === "string") textParts.push(part)
+      else if ((part as Record<string, unknown> | null)?.type === "text") {
+        textParts.push(String((part as Record<string, unknown>).text ?? ""))
+      }
+    }
+    return textParts.join("\n")
+  }
+  return String(content ?? "")
+}
+
+// ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
+/**
+ * LangChain callback handler that scans prompts and responses via the
+ * PromptGuard Guard API.
+ *
+ * **Redact decisions block in enforce mode:** LangChain callbacks observe
+ * calls but cannot rewrite the inputs of the in-flight LLM call, so a
+ * `redact` decision cannot be honored here. In enforce mode it is escalated
+ * to a block (a {@link PromptGuardBlockedError} is thrown) rather than
+ * silently sending the content the Guard API asked us to redact. If you need
+ * actual redaction, use auto-instrumentation (`init()`) or explicit
+ * `GuardClient.scan()` calls, which can rewrite the outgoing messages.
+ */
 export class PromptGuardCallbackHandler {
   readonly name = "promptguard"
+
+  /**
+   * Tell LangChain's callback manager to re-throw errors from this handler.
+   *
+   * `@langchain/core` wraps every handler invocation in `consumeCallback`,
+   * which catches handler errors and merely `console.error`s them unless
+   * `handler.raiseError` is true. Without this, a
+   * {@link PromptGuardBlockedError} thrown in enforce mode would be
+   * swallowed and the LLM call would proceed — i.e. enforce mode would not
+   * actually block.
+   */
+  readonly raiseError = true
+
+  /**
+   * Tell LangChain to await this handler before continuing.
+   *
+   * `consumeCallback(fn, wait)` only awaits the handler when `wait`
+   * (`handler.awaitHandlers`) is true; otherwise the scan runs in the
+   * background and cannot abort the LLM call even with `raiseError` set.
+   */
+  readonly awaitHandlers = true
 
   private readonly guard: GuardClient
   private readonly mode: "enforce" | "monitor"
@@ -64,9 +134,17 @@ export class PromptGuardCallbackHandler {
 
     const { apiKey, baseUrl } = resolveCredentials(options.apiKey, options.baseUrl)
 
-    this.guard = new GuardClient({ apiKey, baseUrl, timeout: options.timeout })
+    this.guard = new GuardClient({
+      apiKey,
+      baseUrl,
+      timeout: options.timeout,
+      maxRetries: options.maxRetries,
+      retryDelay: options.retryDelay,
+    })
     this.mode = options.mode ?? "enforce"
-    this.scanResponses = options.scanResponses ?? true
+    // Default false: consistent with init() and the Vercel AI middleware
+    // (least surprise + no unexpected per-response Guard API cost).
+    this.scanResponses = options.scanResponses ?? false
     this.failOpen = options.failOpen ?? true
   }
 
@@ -107,7 +185,7 @@ export class PromptGuardCallbackHandler {
       for (const raw of messageList) {
         const msg = raw as Record<string, unknown>
         const role = this.mapRole(String(msg?.type ?? msg?.role ?? "user"))
-        const content = String(msg?.content ?? msg?.text ?? "")
+        const content = flattenMessageContent(msg?.content ?? msg?.text ?? "")
         guardMessages.push({ role, content })
       }
     }
@@ -223,7 +301,12 @@ export class PromptGuardCallbackHandler {
     try {
       return await this.guard.scan(messages, direction, model, context)
     } catch (err) {
-      if (!this.failOpen) throw new Error("Guard API unavailable")
+      // Only a Guard API outage is eligible for fail-open (mirrors
+      // patches/base.ts). Any other error is a real bug and must surface.
+      if (!(err instanceof GuardApiError)) throw err
+      // Failing closed rethrows the original typed error so callers keep
+      // the status code and cause instead of an anonymous Error.
+      if (!this.failOpen) throw err
       logger.warn(
         `Guard API unavailable, allowing ${direction} unscanned (failOpen=true): ${safeErrorLabel(
           err,
@@ -244,7 +327,20 @@ export class PromptGuardCallbackHandler {
     }
 
     if (decision.redacted) {
-      logger.info(`redacted content (event=${decision.eventId}, run=${runId})`)
+      if (this.mode === "enforce") {
+        // Callbacks cannot rewrite the in-flight call's inputs, so the
+        // redaction cannot be applied. Proceeding would silently send the
+        // content the Guard API asked us to redact — escalate to a block.
+        logger.error(
+          `redact decision cannot be applied from a LangChain callback; ` +
+            `escalating to block (event=${decision.eventId}, run=${runId})`,
+        )
+        throw new PromptGuardBlockedError(decision)
+      }
+      logger.warn(
+        `[monitor] would redact: content passed through unredacted ` +
+          `(event=${decision.eventId}, run=${runId})`,
+      )
     }
   }
 
@@ -262,8 +358,8 @@ export class PromptGuardCallbackHandler {
 
     return {
       framework: "langchain",
-      chain_name: chainInfo.chain_name as string | undefined,
-      session_id: runId,
+      chainName: chainInfo.chain_name as string | undefined,
+      sessionId: runId,
       metadata: {
         component,
         tags: tags ?? (chainInfo.tags as string[] | undefined),

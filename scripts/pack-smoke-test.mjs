@@ -1,0 +1,182 @@
+#!/usr/bin/env node
+/**
+ * Packaging smoke test — verifies the published tarball resolves under BOTH
+ * module systems for every exports entry.
+ *
+ * Guards against regressions like exports entries missing a `default`
+ * condition, which made native ESM `import` throw
+ * ERR_PACKAGE_PATH_NOT_EXPORTED while `require()` worked fine.
+ *
+ * Flow: `npm pack` the real tarball, install it into a temp project, then
+ * resolve every subpath via `require()` (CJS) and dynamic `import()` (ESM,
+ * via `node --input-type=module`). Run with `npm run test:pack` (expects a
+ * fresh `npm run build` first).
+ */
+
+import { execFileSync } from "node:child_process"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..")
+const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf-8"))
+
+// Every exports subpath, normalized to a bare specifier.
+const subpaths = Object.keys(pkg.exports).map((key) =>
+  key === "." ? pkg.name : `${pkg.name}/${key.slice(2)}`,
+)
+
+// Symbols that must be reachable through the root entry in both systems.
+const rootSymbols = ["PromptGuard", "GuardClient", "init"]
+
+const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "pg-pack-smoke-"))
+let failed = false
+
+function run(cmd, args, opts = {}) {
+  return execFileSync(cmd, args, { encoding: "utf-8", ...opts })
+}
+
+function check(label, fn) {
+  try {
+    fn()
+    console.log(`  ok: ${label}`)
+  } catch (err) {
+    failed = true
+    console.error(`  FAIL: ${label}`)
+    console.error(String(err.stderr || err.message || err).trim())
+  }
+}
+
+try {
+  console.log("Packing tarball…")
+  const packOutput = run("npm", ["pack", "--pack-destination", workDir, "--json"], { cwd: root })
+  const tarball = path.join(workDir, JSON.parse(packOutput)[0].filename)
+
+  console.log("Installing into temp project…")
+  const appDir = path.join(workDir, "app")
+  fs.mkdirSync(appDir)
+  fs.writeFileSync(path.join(appDir, "package.json"), JSON.stringify({ private: true }))
+  run("npm", ["install", "--no-audit", "--no-fund", "--no-save", tarball], { cwd: appDir })
+
+  for (const specifier of subpaths) {
+    check(`require("${specifier}")`, () => {
+      run("node", ["-e", `require(${JSON.stringify(specifier)})`], { cwd: appDir })
+    })
+    check(`import("${specifier}")`, () => {
+      run("node", ["--input-type=module", "-e", `await import(${JSON.stringify(specifier)})`], {
+        cwd: appDir,
+      })
+    })
+  }
+
+  const symbolCheck = rootSymbols
+    .map((s) => `if (typeof sdk[${JSON.stringify(s)}] === "undefined") throw new Error(${JSON.stringify(s)} + " missing")`)
+    .join("\n")
+  check("root exports expose expected symbols (CJS)", () => {
+    run("node", ["-e", `const sdk = require(${JSON.stringify(pkg.name)})\n${symbolCheck}`], {
+      cwd: appDir,
+    })
+  })
+  check("root exports expose expected symbols (ESM)", () => {
+    run(
+      "node",
+      [
+        "--input-type=module",
+        "-e",
+        `const sdk = await import(${JSON.stringify(pkg.name)})\n${symbolCheck}`,
+      ],
+      { cwd: appDir },
+    )
+  })
+
+  // Named exports only: there must be NO default export (a default export is an
+  // ESM footgun — `import PromptGuard from 'promptguard-sdk'` would bind to the
+  // namespace object, not the class). Guard both module systems so the removal
+  // can't silently regress.
+  check("no default export (CJS)", () => {
+    run(
+      "node",
+      [
+        "-e",
+        `const sdk = require(${JSON.stringify(pkg.name)})\n` +
+          `if ("default" in sdk) throw new Error("unexpected default export on CJS namespace")`,
+      ],
+      { cwd: appDir },
+    )
+  })
+  check("no default export, named import works (ESM)", () => {
+    run(
+      "node",
+      [
+        "--input-type=module",
+        "-e",
+        `import * as ns from ${JSON.stringify(pkg.name)}\n` +
+          `if ("default" in ns && typeof ns.default?.name === "string" && ns.default.name === "PromptGuard") ` +
+          `throw new Error("default export resolves to the PromptGuard class — footgun reintroduced")\n` +
+          `const { PromptGuard } = ns\n` +
+          `if (typeof PromptGuard !== "function") throw new Error("named PromptGuard export missing")`,
+      ],
+      { cwd: appDir },
+    )
+  })
+
+  // Types resolve under classic `moduleResolution: "node"` — the CJS-first
+  // mode most consumers (and this repo's own tsconfig) use. Classic node
+  // ignores the package `exports` map, so the documented subpath imports
+  // (`/auto`, `/guard`, `/integrations/*`) resolve types ONLY via the
+  // `typesVersions` fallback in package.json. Without it, tsc fails with
+  // TS2307 on every subpath. This guards that fallback from regressing.
+  const tscBin = path.join(root, "node_modules", "typescript", "bin", "tsc")
+  const typesCheckSrc = [
+    "// Auto-generated by pack-smoke-test: exercises every exports subpath so",
+    "// classic-node type resolution (via typesVersions) is verified end-to-end.",
+    'import { init } from "promptguard-sdk/auto"',
+    'import { GuardClient } from "promptguard-sdk/guard"',
+    'import { PromptGuardCallbackHandler } from "promptguard-sdk/integrations/langchain"',
+    'import { promptGuardMiddleware } from "promptguard-sdk/integrations/vercel-ai"',
+    'import { PromptGuard } from "promptguard-sdk"',
+    'import type { ChatCompletionRequest, ToolValidationResult } from "promptguard-sdk"',
+    "void init",
+    "void GuardClient",
+    "void PromptGuardCallbackHandler",
+    "void promptGuardMiddleware",
+    "void PromptGuard",
+    "const _req: ChatCompletionRequest | null = null",
+    "const _tool: ToolValidationResult | null = null",
+    "void _req",
+    "void _tool",
+    "",
+  ].join("\n")
+  const typesCheckTsconfig = JSON.stringify(
+    {
+      compilerOptions: {
+        moduleResolution: "node",
+        module: "commonjs",
+        target: "ES2020",
+        lib: ["ES2020"],
+        strict: true,
+        noEmit: true,
+        skipLibCheck: true,
+        esModuleInterop: true,
+        types: [],
+      },
+      files: ["types-check.ts"],
+    },
+    null,
+    2,
+  )
+  fs.writeFileSync(path.join(appDir, "types-check.ts"), typesCheckSrc)
+  fs.writeFileSync(path.join(appDir, "tsconfig.types-check.json"), typesCheckTsconfig)
+  check('subpath types resolve under moduleResolution:"node" (classic)', () => {
+    run(process.execPath, [tscBin, "-p", "tsconfig.types-check.json"], { cwd: appDir })
+  })
+} finally {
+  fs.rmSync(workDir, { recursive: true, force: true })
+}
+
+if (failed) {
+  console.error("\nPackaging smoke test FAILED")
+  process.exit(1)
+}
+console.log("\nPackaging smoke test passed")

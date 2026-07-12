@@ -49,14 +49,46 @@ export interface InitOptions {
   /** HTTP timeout in ms for Guard API calls (default: `10000`). */
   timeout?: number
   /**
+   * Retry attempts for transient Guard API failures (network errors and
+   * 429/5xx responses) before the `failOpen` policy governs. Default: `3`.
+   * Retries never change the eventual decision — see {@link GuardClientConfig}.
+   */
+  maxRetries?: number
+  /** Base delay in ms between Guard API retries (exponential backoff). Default: `1000`. */
+  retryDelay?: number
+  /**
    * SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress all
    * SDK logging, or `"info"`/`"debug"` for the init banner and more detail.
+   * NOTE: this sets the **process-global** SDK log level (shared with the
+   * framework integrations); the most recent setter wins.
    */
   logLevel?: LogLevel
   /** Convenience shorthand for `logLevel: "silent"`. */
   silent?: boolean
 }
 
+/**
+ * Initialise PromptGuard auto-instrumentation.
+ *
+ * Patches the provider SDKs (`openai`, `@anthropic-ai/sdk`,
+ * `@google/generative-ai`, `cohere-ai`, `@aws-sdk/client-bedrock-runtime`)
+ * so every LLM call they make is scanned by the Guard API.
+ *
+ * **Limitation — ESM apps (dual-package hazard):** patches are applied to the
+ * module instances resolved via CommonJS `require()`. If your application runs
+ * as native ESM (`"type": "module"` / `.mjs`) and the provider ships separate
+ * ESM builds, your `import`ed module instances can be *different objects* from
+ * the patched CJS ones — in that case auto-instrumentation silently protects
+ * nothing. Use {@link getAppliedPatches} as a runtime canary to verify the
+ * providers you use were actually patched, and prefer the ESM-safe
+ * alternatives: the LangChain callback handler
+ * (`promptguard-sdk/integrations/langchain`), the Vercel AI SDK middleware
+ * (`promptguard-sdk/integrations/vercel-ai`), or explicit `GuardClient.scan()`
+ * calls. See README "Limitations: ESM apps".
+ *
+ * When zero patches could be applied, a warning is logged so a
+ * misconfiguration never fails silently.
+ */
 export function init(options: InitOptions = {}): void {
   if (options.silent) {
     setLogLevel("silent")
@@ -75,6 +107,8 @@ export function init(options: InitOptions = {}): void {
     apiKey,
     baseUrl,
     timeout: options.timeout ?? 10_000,
+    maxRetries: options.maxRetries,
+    retryDelay: options.retryDelay,
   })
 
   mode = resolvedMode
@@ -83,8 +117,15 @@ export function init(options: InitOptions = {}): void {
 
   applyPatches()
 
-  // Suppressed by default (info level). Set logLevel: "info" to see this.
-  logger.info(`auto-instrumentation initialised (mode=${mode}, fail_open=${failOpen})`)
+  // One-line confirmation of which provider SDKs are actually protected.
+  // Suppressed by default (info level); set logLevel: "info" to see it, or
+  // read the same list programmatically via getAppliedPatches(). When ZERO
+  // patches applied, applyPatches() already logged a warn (visible by default).
+  const protecting = getAppliedPatches()
+  logger.info(
+    `auto-instrumentation initialised (mode=${mode}, fail_open=${failOpen}) — ` +
+      `protecting: ${protecting.length ? protecting.join(", ") : "none"}`,
+  )
 }
 
 export function shutdown(): void {
@@ -119,6 +160,27 @@ export function shouldScanResponses(): boolean {
   return scanResponses
 }
 
+/**
+ * Runtime canary: the names of the auto-instrumentation patches that were
+ * actually applied by {@link init} (e.g. `["openai", "anthropic"]`).
+ *
+ * Because patches attach to the CJS-resolved provider modules, an ESM app can
+ * call `init()` successfully and still be unprotected (see the dual-package
+ * hazard note on {@link init}). Assert on this at startup when you rely on
+ * enforce mode:
+ *
+ * @example
+ * ```ts
+ * init({ apiKey: "pg_live_xxx" });
+ * if (!getAppliedPatches().includes("openai")) {
+ *   throw new Error("PromptGuard did not patch the openai SDK");
+ * }
+ * ```
+ */
+export function getAppliedPatches(): string[] {
+  return appliedPatches.map((p) => p.name)
+}
+
 // ---------------------------------------------------------------------------
 // Patch orchestration
 // ---------------------------------------------------------------------------
@@ -139,10 +201,36 @@ function applyPatches(): void {
         revert: () => void
       }
       if (patchModule.apply()) {
-        appliedPatches.push({ name: mod.name, revert: patchModule.revert })
+        // apply() is idempotent per patch module, so a second init() without
+        // shutdown() reports "already patched" success. Skip the push when
+        // the patch is already tracked — a duplicate entry would make the
+        // getAppliedPatches() canary lie and call revert() twice on
+        // shutdown().
+        if (!appliedPatches.some((p) => p.name === mod.name)) {
+          appliedPatches.push({ name: mod.name, revert: patchModule.revert })
+        }
+      } else {
+        logger.debug(
+          `${mod.name} patch not applied: SDK not resolvable via require() ` +
+            `(not installed, or only reachable as ESM)`,
+        )
       }
-    } catch {
-      // SDK not installed or incompatible - skip silently
+    } catch (err: unknown) {
+      logger.debug(
+        `${mod.name} patch not applied: ${err instanceof Error ? err.message : String(err)}`,
+      )
     }
+  }
+
+  if (appliedPatches.length === 0) {
+    logger.warn(
+      "init() applied ZERO auto-instrumentation patches — no supported LLM SDK was " +
+        "resolvable via CommonJS require(), so NO calls are being scanned. If your app " +
+        'runs as native ESM ("type": "module" / .mjs), auto-instrumentation cannot see ' +
+        "the module instances your code imports (dual-package hazard). Use the ESM-safe " +
+        "integrations instead: the LangChain callback handler, the Vercel AI SDK " +
+        "middleware, or explicit GuardClient.scan() calls. " +
+        'See README "Limitations: ESM apps". Set logLevel: "debug" for per-SDK reasons.',
+    )
   }
 }

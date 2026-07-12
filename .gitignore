@@ -4,3 +4,6 @@ dist/
 *.tsbuildinfo
 coverage/
 .DS_Store
+
+# npm pack artifacts (produced by the pack smoke test)
+*.tgz
