@@ -402,7 +402,11 @@ export function ensureProxySuffix(baseUrl: string): string {
   } catch {
     // Not a parseable absolute URL — fall back to safe string handling so we
     // never throw from the constructor on an unusual but intended value.
-    const trimmed = baseUrl.replace(/\/+$/, "")
+    // Strip trailing slashes with a linear scan rather than a `/\/+$/` regex
+    // (which CodeQL flags as polynomial ReDoS on many-slash input).
+    let end = baseUrl.length
+    while (end > 0 && baseUrl.charCodeAt(end - 1) === 47 /* "/" */) end--
+    const trimmed = baseUrl.slice(0, end)
     return trimmed.split("/").pop() === "proxy" ? trimmed : `${trimmed}/proxy`
   }
   // Strip a single trailing slash from the path so we operate on segments.

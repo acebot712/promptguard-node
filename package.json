@@ -138,5 +138,9 @@
     "cohere-ai": {
       "optional": true
     }
+  },
+  "overrides": {
+    "js-yaml": "^3.15.0",
+    "@babel/core": "^7.29.6"
   }
 }
