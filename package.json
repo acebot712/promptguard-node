@@ -1,6 +1,6 @@
 {
   "name": "promptguard-sdk",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "description": "Drop-in security for AI applications - AI Firewall SDK with auto-instrumentation",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
