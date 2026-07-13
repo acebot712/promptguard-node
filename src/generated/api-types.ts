@@ -9,18 +9,8 @@
 
 /* eslint-disable */
 export interface AgentPoliciesResponse {
-  policies: Array<AgentPolicy>
+  policies: Array<developer__policies__router__AgentPolicy>
   total: number
-}
-
-/** A single enforced rule, flattened for the agent UI. */
-export interface AgentPolicy {
-  id: string
-  name: string
-  description?: string | unknown
-  action: string
-  threat_types?: Array<string>
-  priority?: number
 }
 
 /** Request to register a new agent identity. */
@@ -81,13 +71,6 @@ export interface AuthErrorEnvelope {
   error: ErrorDetail
 }
 
-/** Request to run the autonomous red team agent. */
-export interface AutonomousRequest {
-  budget?: number
-  target_preset?: string
-  enabled_detectors?: Array<string> | unknown
-}
-
 /** A document retrieved by a RAG pipeline to be scanned for poisoning. */
 export interface ContextDoc {
   /** Document text content */
@@ -144,6 +127,16 @@ export interface developer__agent__router__ToolCallResponse {
   reason: string
   warnings?: Array<string>
   blocked_reasons?: Array<string>
+}
+
+/** A single enforced rule, flattened for the agent UI. */
+export interface developer__policies__router__AgentPolicy {
+  id: string
+  name: string
+  description?: string | unknown
+  action: string
+  threat_types?: Array<string>
+  priority?: number
 }
 
 export interface developer__projects__schemas__CreateProjectRequest {
@@ -264,31 +257,14 @@ export interface HTTPValidationError {
   detail?: Array<ValidationError>
 }
 
-/** Request to run a red team test */
-export interface internal__redteam__router__TestRequest {
-  custom_prompt?: string | unknown
-  target_preset?: string
-}
-
-/** Response from a red team test */
-export interface internal__redteam__router__TestResponse {
-  test_name: string
-  prompt: string
-  decision: string
-  reason: string
-  threat_type: string | unknown
-  confidence: number
-  blocked: boolean
-  details: Record<string, unknown>
-}
-
-/** Summary of all red team tests */
-export interface internal__redteam__router__TestSummary {
-  total_tests: number
-  blocked: number
-  allowed: number
-  block_rate: number
-  results: Array<internal__redteam__router__TestResponse>
+/** The managed update policy an enrolled Shadow AI device should apply.
+``fleet`` reflects the org's ``shadow_ai_fleet`` entitlement; when false the
+other fields are null and the device keeps its local user preference. */
+export interface ManagedPolicyResponse {
+  fleet?: boolean
+  force_update_mode?: string | unknown
+  pinned_channel?: string | unknown
+  min_version_override?: string | unknown
 }
 
 /** A media attachment to be scanned for steganographic/adversarial payloads. */
