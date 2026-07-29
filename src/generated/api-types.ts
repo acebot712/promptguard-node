@@ -9,18 +9,8 @@
 
 /* eslint-disable */
 export interface AgentPoliciesResponse {
-  policies: Array<AgentPolicy>
+  policies: Array<developer__policies__router__AgentPolicy>
   total: number
-}
-
-/** A single enforced rule, flattened for the agent UI. */
-export interface AgentPolicy {
-  id: string
-  name: string
-  description?: string | unknown
-  action: string
-  threat_types?: Array<string>
-  priority?: number
 }
 
 /** Request to register a new agent identity. */
@@ -55,6 +45,57 @@ export interface AgentStats {
   anomalies_detected: number
 }
 
+/** Capability profile for one tool along the four lethal-trifecta axes. */
+export interface AgentToolLabels {
+  untrusted_content?: boolean
+  private_data?: boolean
+  public_sink?: boolean
+  destructive?: boolean
+}
+
+/** One event of a full agent execution trace.
+
+An event with a ``tool_name`` is a tool call: its ``arguments`` (a sink's
+inputs) and ``output`` (a source of taint) drive the trace-level detectors.
+Events without one are plain assistant / user turns, kept as context. */
+export interface AgentTraceEvent {
+  role?: string
+  tool_name?: string | unknown
+  arguments?: Record<string, unknown>
+  output?: unknown
+  content?: string
+  thought?: string
+}
+
+/** A single detector hit, normalized across detectors. */
+export interface AgentTraceFinding {
+  detector: string
+  code: string
+  severity: string
+  reason: string
+  decision: string
+  metadata?: Record<string, unknown>
+}
+
+/** A full agent execution trace to audit post-hoc.
+
+Unlike ``/validate-tool`` (a pre-execution check of a single tool name +
+args), this carries the whole chronological trace *with tool outputs* plus
+the user's original objective, so the value-level dataflow-taint and
+goal-alignment detectors can fire. */
+export interface AgentTraceRequest {
+  user_objective?: string
+  events?: Array<AgentTraceEvent>
+  tool_labels?: Record<string, unknown> | unknown
+}
+
+/** Aggregated verdict over the ingested trace. */
+export interface AgentTraceResponse {
+  decision: string
+  findings?: Array<AgentTraceFinding>
+  event_id: string
+}
+
 /** Response containing the full API key for copy functionality */
 export interface ApiKeyFullResponse {
   id: string
@@ -79,13 +120,6 @@ export interface ApiKeyResponse {
 
 export interface AuthErrorEnvelope {
   error: ErrorDetail
-}
-
-/** Request to run the autonomous red team agent. */
-export interface AutonomousRequest {
-  budget?: number
-  target_preset?: string
-  enabled_detectors?: Array<string> | unknown
 }
 
 /** A document retrieved by a RAG pipeline to be scanned for poisoning. */
@@ -146,6 +180,16 @@ export interface developer__agent__router__ToolCallResponse {
   blocked_reasons?: Array<string>
 }
 
+/** A single enforced rule, flattened for the agent UI. */
+export interface developer__policies__router__AgentPolicy {
+  id: string
+  name: string
+  description?: string | unknown
+  action: string
+  threat_types?: Array<string>
+  priority?: number
+}
+
 export interface developer__projects__schemas__CreateProjectRequest {
   name: string
   description?: string | unknown
@@ -163,6 +207,16 @@ export interface developer__projects__schemas__ProjectResponse {
   strictness_level: string
   zero_retention?: boolean
   created_at: string
+}
+
+export interface DivergenceItemOut {
+  text_preview: string
+  category: string
+  base_decision: string
+  base_confidence: number
+  candidate_decision: string
+  candidate_confidence: number
+  divergence: string
 }
 
 export interface EnrollRequest {
@@ -187,7 +241,6 @@ export interface EnrollResponse {
   mode?: string
   fail_closed?: boolean
   ca_cert?: string | unknown
-  ca_key?: string | unknown
   end_user_label?: string | unknown
   account_name?: string | unknown
   account_type?: string
@@ -226,6 +279,17 @@ export interface GuardMessage {
   content?: string
 }
 
+/** Per-guardrail override the overlay wants to apply.
+
+Matches the ``guardrails`` override shape PolicyEngine already reads:
+``{enabled, level, threshold}``. ``enabled=False`` disables a detector and
+is only ever a *loosening* op (surfaced as a critical warning). */
+export interface GuardrailDelta {
+  enabled?: boolean | unknown
+  level?: "strict" | "moderate" | "permissive" | unknown
+  threshold?: number | unknown
+}
+
 /** Request body for the guard endpoint. */
 export interface GuardRequest {
   /** Messages to scan (OpenAI-style message array) */
@@ -250,6 +314,8 @@ export interface GuardResponse {
   event_id: string
   /** Confidence score of the decision */
   confidence: number
+  /** Aggregate decision-driving score (severity * confidence, clamped to [0, 1]) when a severity-carrying detector decided the verdict; null otherwise. Raw confidence stays in the `confidence` field. */
+  weighted_score?: number | unknown
   /** Primary threat type detected */
   threat_type?: string | unknown
   /** Redacted messages (only present when decision='redact') */
@@ -264,31 +330,14 @@ export interface HTTPValidationError {
   detail?: Array<ValidationError>
 }
 
-/** Request to run a red team test */
-export interface internal__redteam__router__TestRequest {
-  custom_prompt?: string | unknown
-  target_preset?: string
-}
-
-/** Response from a red team test */
-export interface internal__redteam__router__TestResponse {
-  test_name: string
-  prompt: string
-  decision: string
-  reason: string
-  threat_type: string | unknown
-  confidence: number
-  blocked: boolean
-  details: Record<string, unknown>
-}
-
-/** Summary of all red team tests */
-export interface internal__redteam__router__TestSummary {
-  total_tests: number
-  blocked: number
-  allowed: number
-  block_rate: number
-  results: Array<internal__redteam__router__TestResponse>
+/** The managed update policy an enrolled Shadow AI device should apply.
+``fleet`` reflects the org's ``shadow_ai_fleet`` entitlement; when false the
+other fields are null and the device keeps its local user preference. */
+export interface ManagedPolicyResponse {
+  fleet?: boolean
+  force_update_mode?: string | unknown
+  pinned_channel?: string | unknown
+  min_version_override?: string | unknown
 }
 
 /** A media attachment to be scanned for steganographic/adversarial payloads. */
@@ -303,6 +352,49 @@ export interface MediaPartSchema {
   base64?: string | unknown
   /** Extra metadata */
   metadata?: Record<string, unknown> | unknown
+}
+
+export interface OverlayApplyRequest {
+  name: string
+  delta: OverlayDelta
+  project_id?: string | unknown
+  acknowledge_loosening?: boolean
+}
+
+/** Additive deltas over a base policy config.
+
+Everything here is meant to *tighten*. Loosening ops (raising a threshold,
+dropping a detection level toward permissive, disabling a guardrail) are
+permitted to be expressed but are flagged as warnings in the diff. */
+export interface OverlayDelta {
+  detection_levels?: Record<string, unknown>
+  toxicity_threshold?: number | unknown
+  add_custom_patterns?: Array<string>
+  add_blocked_domains?: Array<string>
+  guardrails?: Record<string, unknown>
+}
+
+export interface OverlayOut {
+  id: string
+  name: string
+  version: number
+  status: string
+  project_id: string | unknown
+  warnings: Array<OverlayWarningOut>
+}
+
+export interface OverlayPreviewRequest {
+  delta: OverlayDelta
+  sample?: SampleSource
+  max_examples?: number
+  project_id?: string | unknown
+}
+
+export interface OverlayWarningOut {
+  kind: string
+  field: string
+  message: string
+  severity: "warning" | "critical"
 }
 
 export interface QuotaErrorDetail {
@@ -335,6 +427,16 @@ export interface RedactResponse {
   piiFound: Array<string>
 }
 
+/** Where the shadow traffic sample comes from.
+
+``corpus`` reuses the curated Shadow eval corpus (offline, deterministic);
+``inline`` lets the caller pass their own recent-traffic prompts. */
+export interface SampleSource {
+  kind?: "corpus" | "inline"
+  limit?: number
+  texts?: Array<string>
+}
+
 export interface ScanRequest {
   /** Text to scan */
   content: string
@@ -352,11 +454,22 @@ export interface ScanResponse {
   processingTimeMs: number
 }
 
+export interface ShadowReportOut {
+  total: number
+  counts: Record<string, unknown>
+  blocked_base: number
+  blocked_candidate: number
+  warnings: Array<OverlayWarningOut>
+  examples: Record<string, unknown>
+}
+
 /** Individual threat found during scanning. */
 export interface ThreatDetail {
   type: string
   confidence: number
   details: string
+  /** severity_score * confidence, clamped to [0, 1]. The decision-driving number when a severity-carrying detector (e.g. structural heuristics) fired; null when confidence alone is the signal. */
+  weighted_score?: number | unknown
 }
 
 export interface ValidationError {
