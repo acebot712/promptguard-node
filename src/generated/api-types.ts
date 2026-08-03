@@ -8,6 +8,27 @@
  */
 
 /* eslint-disable */
+/** Content being written to, or read back from, an agent's memory. */
+export interface AgentMemoryRequest {
+  /** The memory chunk to scan */
+  content: string
+  /** 'write' before persisting a chunk, 'read' when a stored chunk is retrieved. Scan both: a chunk poisoned before this endpoint existed, or written through another path, is only catchable on read. */
+  direction?: string
+  /** Your identifier for the chunk */
+  memory_id?: string | unknown
+}
+
+/** Verdict on one memory chunk. */
+export interface AgentMemoryResponse {
+  decision: string
+  detected: boolean
+  reason?: string
+  confidence?: number
+  match_type?: string | unknown
+  content_hash?: string | unknown
+  event_id: string
+}
+
 export interface AgentPoliciesResponse {
   policies: Array<developer__policies__router__AgentPolicy>
   total: number
@@ -193,7 +214,8 @@ export interface developer__policies__router__AgentPolicy {
 export interface developer__projects__schemas__CreateProjectRequest {
   name: string
   description?: string | unknown
-  fail_mode?: string
+  /** Behaviour when the detection engine errors: 'open' forwards the request, 'closed' rejects it with 503. */
+  fail_mode?: "open" | "closed"
   use_case?: string
   strictness_level?: string
 }
@@ -240,7 +262,6 @@ export interface EnrollResponse {
   enforced?: boolean
   mode?: string
   fail_closed?: boolean
-  ca_cert?: string | unknown
   end_user_label?: string | unknown
   account_name?: string | unknown
   account_type?: string
@@ -300,7 +321,7 @@ export interface GuardRequest {
   model?: string | unknown
   /** Optional framework context */
   context?: GuardContext | unknown
-  /** RAG-retrieved documents to scan for knowledge poisoning. Each document is individually scanned before being merged into the LLM prompt. Optional; backwards-compatible. */
+  /** RAG-retrieved documents to scan for knowledge poisoning. Each document is scanned individually; the first poisoned one blocks the request, and its position and source are returned in the event metadata so you know which document to drop. Scanning stops at that point, so a request with several poisoned documents reports the first. Optional; backwards-compatible. */
   retrieved_context?: Array<ContextDoc> | unknown
   /** Media attachments to scan for steganographic payloads, adversarial patches, and font injection. Optional. */
   media?: Array<MediaPartSchema> | unknown
