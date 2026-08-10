@@ -217,6 +217,14 @@ const PATCH_MODULES = [
  * ones.
  */
 const KNOWN_UNPATCHED = [
+  // VERIFIED 2026-08-11, not assumed: `@ai-sdk/openai` 4.0.36 declares only
+  // `@ai-sdk/provider` and `@ai-sdk/provider-utils` as dependencies. It does
+  // NOT use the `openai` package, so it makes its own HTTP calls and our
+  // `openai` patch never sees them. The Vercel AI SDK is covered by the proxy
+  // and by nothing else, which is the opposite of what we told people.
+  "@ai-sdk/openai",
+  "@ai-sdk/anthropic",
+  "@ai-sdk/google",
   "groq-sdk",
   "@mistralai/mistralai",
   "together-ai",
