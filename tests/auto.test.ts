@@ -42,7 +42,18 @@ describe("init with no patchable SDKs", () => {
 
     init({ apiKey: "pg_test", logLevel: "debug" })
 
-    for (const name of ["openai", "anthropic", "google", "cohere", "bedrock"]) {
+    // The two Google SDKs report separately on purpose: `@google/genai` is the
+    // one Google ships today and `@google/generative-ai` is the deprecated one
+    // we still support, and `getAppliedPatches()` has to say which of them you
+    // are actually covered on.
+    for (const name of [
+      "openai",
+      "anthropic",
+      "google-genai",
+      "google-generativeai",
+      "cohere",
+      "bedrock",
+    ]) {
       expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining(`${name} patch not applied`))
     }
   })

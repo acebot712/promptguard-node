@@ -28,7 +28,14 @@
  */
 
 // Auto-instrumentation
-export { getAppliedPatches, type InitOptions, init, shutdown } from "./auto"
+export {
+  detectedUnpatched,
+  getAppliedPatches,
+  type InitOptions,
+  init,
+  instrumentationReport,
+  shutdown,
+} from "./auto"
 // Proxy client types (for `import type { ... } from 'promptguard-sdk'`)
 export type {
   AutonomousRedTeamReport,
