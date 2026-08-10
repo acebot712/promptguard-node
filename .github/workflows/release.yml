@@ -33,6 +33,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # A CHANGELOG is only worth having if it is written when the release is
+      # cut. This fails the release rather than letting a version ship with no
+      # entry -- reconstructing them afterwards produces a list of tag subjects,
+      # which is what every entry below 1.10.1 already is.
+      - name: CHANGELOG has an entry for this version
+        run: node scripts/check-changelog.mjs
+
       - name: Biome check (lint + format)
         run: npx biome check .
 
