@@ -68,7 +68,8 @@ Auto-instrumentation patches the `create` / `generateContent` / `chat` / `send` 
 |-----|------------|-------------------|
 | OpenAI | `openai` | `chat.completions.create`, `responses.create` (string and message-item `input` forms) |
 | Anthropic | `@anthropic-ai/sdk` | `messages.create` |
-| Google Generative AI | `@google/generative-ai` | `generateContent` |
+- `@google/genai` (Google's current SDK): `models.generateContent()` / `generateContentStream()`. The `config.systemInstruction` system prompt is scanned, as are tool-call arguments and code-execution output. Patched by swapping the exported `GoogleGenAI` constructor, because this SDK assigns `generateContent` as an own property in the constructor rather than on the prototype.
+| Google Generative AI | `@google/generative-ai` | `generateContent` | (**deprecated by Google**; still supported because customers are still on it)
 | Cohere | `cohere-ai` | `Client.chat` / `ClientV2.chat` |
 | AWS Bedrock | `@aws-sdk/client-bedrock-runtime` | `BedrockRuntimeClient.send` (InvokeModel, InvokeModelWithResponseStream, Converse, ConverseStream) |
 

@@ -185,14 +185,116 @@ export function getAppliedPatches(): string[] {
 // Patch orchestration
 // ---------------------------------------------------------------------------
 
+/**
+ * Every patch module, with the packages each one can hook.
+ *
+ * `detects` is what lets `init()` tell "the customer does not use this
+ * provider" apart from "the customer uses it and we failed to hook it". Those
+ * two used to look identical, so a customer with `openai` and `@google/genai`
+ * installed saw a healthy startup and had no idea their Gemini traffic was
+ * unscanned.
+ */
+const PATCH_MODULES = [
+  { name: "openai", path: "./patches/openai", detects: ["openai"] },
+  { name: "anthropic", path: "./patches/anthropic", detects: ["@anthropic-ai/sdk"] },
+  { name: "google-genai", path: "./patches/google-genai", detects: ["@google/genai"] },
+  { name: "google-generativeai", path: "./patches/google", detects: ["@google/generative-ai"] },
+  { name: "cohere", path: "./patches/cohere", detects: ["cohere-ai"] },
+  { name: "bedrock", path: "./patches/bedrock", detects: ["@aws-sdk/client-bedrock-runtime"] },
+]
+
+/**
+ * Packages we know about and deliberately do NOT hook, with the same advice.
+ *
+ * Every one works today through the proxy — point the client's base URL at
+ * PromptGuard. Listing them is not a promise to hook them; it is the difference
+ * between telling a customer "not instrumented, here is the one-line fix" and
+ * telling them nothing while they believe they are covered.
+ *
+ * Frameworks are deliberately absent. LangChain's ChatOpenAI calls the `openai`
+ * package underneath, which we patch, so its traffic is scanned transitively —
+ * warning about it would be a false alarm that trains people to ignore the real
+ * ones.
+ */
+const KNOWN_UNPATCHED = [
+  // VERIFIED 2026-08-11, not assumed: `@ai-sdk/openai` 4.0.36 declares only
+  // `@ai-sdk/provider` and `@ai-sdk/provider-utils` as dependencies. It does
+  // NOT use the `openai` package, so it makes its own HTTP calls and our
+  // `openai` patch never sees them. The Vercel AI SDK is covered by the proxy
+  // and by nothing else, which is the opposite of what we told people.
+  "@ai-sdk/openai",
+  "@ai-sdk/anthropic",
+  "@ai-sdk/google",
+  "groq-sdk",
+  "@mistralai/mistralai",
+  "together-ai",
+  "ollama",
+  "@google-cloud/aiplatform",
+  "@aws-sdk/client-bedrock-agent-runtime",
+]
+
+const ADVICE_URL = "https://docs.promptguard.co/integrations/auto-instrumentation"
+
+function isInstalled(pkg: string): boolean {
+  try {
+    require.resolve(pkg)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Provider packages that are installed but are NOT being scanned. */
+export function detectedUnpatched(): string[] {
+  const hooked = new Set(getAppliedPatches())
+  const found: string[] = []
+
+  for (const mod of PATCH_MODULES) {
+    if (hooked.has(mod.name)) continue
+    for (const pkg of mod.detects) if (isInstalled(pkg)) found.push(pkg)
+  }
+  for (const pkg of KNOWN_UNPATCHED) if (isInstalled(pkg)) found.push(pkg)
+
+  return [...new Set(found)].sort()
+}
+
+/**
+ * What is and is not instrumented, as data rather than a log line.
+ *
+ * A startup warning is only read by whoever is watching at startup. The same
+ * facts in this form can be asserted in the caller's own CI:
+ *
+ * ```ts
+ * expect(instrumentationReport().detectedUnpatched).toEqual([])
+ * ```
+ *
+ * which turns "we told you" into "you cannot ship without knowing".
+ */
+export function instrumentationReport(): {
+  patched: string[]
+  detectedUnpatched: string[]
+  adviceUrl: string
+} {
+  return {
+    patched: getAppliedPatches(),
+    detectedUnpatched: detectedUnpatched(),
+    adviceUrl: ADVICE_URL,
+  }
+}
+
+function warnAboutUnpatchedLibraries(): void {
+  for (const pkg of detectedUnpatched()) {
+    logger.warn(
+      `PromptGuard: '${pkg}' is installed but auto-instrumentation did NOT hook it — ` +
+        `calls made through it are not being scanned. Point that client at the proxy ` +
+        `(set its base URL to your PromptGuard endpoint), or see ${ADVICE_URL} for the ` +
+        `exact call surfaces we patch.`,
+    )
+  }
+}
+
 function applyPatches(): void {
-  const patchModules = [
-    { name: "openai", path: "./patches/openai" },
-    { name: "anthropic", path: "./patches/anthropic" },
-    { name: "google", path: "./patches/google" },
-    { name: "cohere", path: "./patches/cohere" },
-    { name: "bedrock", path: "./patches/bedrock" },
-  ]
+  const patchModules = PATCH_MODULES
 
   for (const mod of patchModules) {
     try {
@@ -221,6 +323,8 @@ function applyPatches(): void {
       )
     }
   }
+
+  warnAboutUnpatchedLibraries()
 
   if (appliedPatches.length === 0) {
     logger.warn(
