@@ -62,7 +62,8 @@ export interface AgentStats {
   total_tool_calls: number
   blocked_calls: number
   avg_risk_score: number
-  active_sessions: number
+  /** Always 0. Agent session state is not retained across requests; this field is deprecated and will be removed in the next API version. */
+  active_sessions?: number
   anomalies_detected: number
 }
 
@@ -274,6 +275,10 @@ export interface ErrorDetail {
   type: string
   /** Machine-readable error code */
   code: string
+}
+
+export interface ErrorEnvelope {
+  error: ErrorDetail
 }
 
 /** Optional rich context from framework integrations. */
