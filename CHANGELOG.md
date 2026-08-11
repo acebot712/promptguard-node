@@ -12,6 +12,8 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [1.11.0] — 2026-08-11
+
 ### Fixed
 
 - **Gemini calls made through `@google/genai` were not being scanned.**
@@ -31,6 +33,9 @@ survives three releases is a changelog nobody is maintaining.
 ### Changed
 
 - `@ai-sdk/openai` (Vercel AI SDK) is listed as **not** auto-instrumented.
+- Two high-severity advisories pinned out of the dev toolchain (`js-yaml`,
+  `brace-expansion`). Both are dev-scope and were never installed by anyone
+  consuming this package, so no published version exposed a user.
   Verified rather than assumed: it declares no dependency on the `openai`
   package and issues its own HTTP calls, so the patch never sees them. It is
   fully covered by the proxy.
