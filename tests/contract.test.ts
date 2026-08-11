@@ -4,8 +4,23 @@
  * If this test fails, the Node SDK has drifted from the cross-SDK
  * contract.  Fix the SDK, not the contract (unless both SDKs agree
  * on the change).
+ *
+ * That sentence used to be untrue in an important way. `guard-contract.json` is
+ * vendored from the platform monorepo's `packages/sdk-shared/guard-contract.json`
+ * and was hand-copied, so every assertion below compared this SDK against a
+ * local duplicate of itself. It could not detect the one thing its own comment
+ * promised. It did not: on 2026-08-11 the monorepo source turned out to be two
+ * minor versions behind this copy (v1.3.0 against v1.5.1), missing the whole
+ * `redaction_enforcement` section, and five months stale.
+ *
+ * "Contract provenance" below is the part that can now fail. The monorepo
+ * publishes the contract at a public URL; `.github/workflows/sync-from-api.yml`
+ * fetches it weekly and `scripts/sync-guard-contract.ts` records the digest it
+ * adopted in `guard-contract.lock.json`. Editing either file by hand breaks the
+ * pair, which is exactly the move that caused the drift.
  */
 
+import * as crypto from "node:crypto"
 import * as fs from "node:fs"
 import * as path from "node:path"
 
@@ -27,8 +42,68 @@ import { contentToGuardFormat } from "../src/patches/google"
 import { messagesToGuardFormat } from "../src/patches/openai"
 
 const CONTRACT_PATH = path.resolve(__dirname, "guard-contract.json")
+const LOCK_PATH = path.resolve(__dirname, "guard-contract.lock.json")
+
+// The canonical URL the contract is synced from. Asserted rather than merely
+// recorded: repointing the sync at some other origin should be a visible test
+// change, not a one-line edit to a workflow nobody reads.
+const CANONICAL_SOURCE = "https://promptguard.co/contracts/guard-contract.json"
 
 const contract = JSON.parse(fs.readFileSync(CONTRACT_PATH, "utf-8"))
+
+// ---------------------------------------------------------------------------
+// Provenance - the check that was missing
+// ---------------------------------------------------------------------------
+
+/**
+ * Everything else in this file tests the SDK against the contract.  This block
+ * tests the *contract* - that the copy in this repo is still the one that was
+ * synced from upstream, and not something someone adjusted locally to make a
+ * failing assertion go away.
+ */
+describe("Contract provenance", () => {
+  const lock = JSON.parse(fs.readFileSync(LOCK_PATH, "utf-8"))
+
+  test("contract matches the digest recorded at sync time", () => {
+    const actual = crypto.createHash("sha256").update(fs.readFileSync(CONTRACT_PATH)).digest("hex")
+
+    // Thrown rather than asserted: Jest has no per-assertion message, and a
+    // bare digest mismatch tells the next person nothing about what to do.
+    if (actual !== lock.sha256) {
+      throw new Error(
+        "tests/guard-contract.json does not match the digest recorded in " +
+          `tests/guard-contract.lock.json.\n  file:     ${actual}\n` +
+          `  lockfile: ${lock.sha256}\n\n` +
+          "This copy is vendored from the platform monorepo and is not yours to " +
+          "edit. If the contract genuinely changed, change it in " +
+          "packages/sdk-shared/guard-contract.json, let `make docs` publish it, and " +
+          "take the PR that .github/workflows/sync-from-api.yml opens - which " +
+          "updates both files together. If you are mid-sync locally, run " +
+          "scripts/sync-guard-contract.ts against the fetched file.",
+      )
+    }
+  })
+
+  test("version matches the lockfile", () => {
+    expect(contract._version).toBe(lock.version)
+  })
+
+  test("lockfile points at the canonical source", () => {
+    expect(lock.source).toBe(CANONICAL_SOURCE)
+  })
+
+  // A digest comparison that cannot fail is decoration.  The assertion above is
+  // only worth having if a single mutated byte actually breaks it, so that is
+  // exercised rather than assumed.
+  test("a changed byte would be caught", () => {
+    const mutated = fs
+      .readFileSync(CONTRACT_PATH)
+      .toString("utf-8")
+      .replace('"_version"', '"_verzion"')
+
+    expect(crypto.createHash("sha256").update(mutated).digest("hex")).not.toBe(lock.sha256)
+  })
+})
 
 // ---------------------------------------------------------------------------
 // GuardDecision
