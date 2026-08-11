@@ -140,9 +140,8 @@
     }
   },
   "overrides": {
-    "js-yaml": "^3.15.0",
-    "@babel/core": "^7.29.6",
-    "brace-expansion@<1.1.16": "^1.1.16",
-    "brace-expansion@>=2.0.0 <2.1.2": "^2.1.2"
+    "js-yaml": "^3.15.1",
+    "brace-expansion@1": "^1.1.18",
+    "brace-expansion@2": "^2.1.4"
   }
 }
