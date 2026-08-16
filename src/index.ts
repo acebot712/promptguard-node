@@ -78,3 +78,11 @@ export { PromptGuardCallbackHandler } from "./integrations/langchain"
 export { promptGuardMiddleware } from "./integrations/vercel-ai"
 // Logging controls
 export { getLogLevel, type LogLevel, setLogLevel } from "./logger"
+// Integration self-check
+export {
+  type CheckStatus,
+  type VerifyCheck,
+  type VerifyOptions,
+  type VerifyReport,
+  verify,
+} from "./verify"

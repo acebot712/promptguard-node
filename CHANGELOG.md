@@ -12,6 +12,27 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Added
+
+- **`verify()` — a positive check that protection is actually live.** `init()`
+  resolving has never meant anything is being scanned: the SDK fails open, so a
+  rejected API key, an unreachable Guard API or a provider SDK we never hooked
+  all leave an application that runs perfectly and blocks nothing. In a
+  native-ESM app, where the patches may never attach at all, that is the default
+  rather than the edge case. Each of those already logged a warning, but a
+  warning in a log nobody tails is indistinguishable from silence. `verify()`
+  makes the real calls — reachability, authentication, a live injection probe, a
+  PII probe — and returns what came back, so a deployment can assert it instead
+  of assuming it. The checks and their names mirror `promptguard verify` in the
+  CLI and `promptguard.verify()` in the Python SDK so all three agree on what
+  "working" means. It never rejects for a failed check, so CI sees every problem
+  at once rather than only the first, and it retries once rather than three
+  times — a diagnostic that takes seven seconds of backoff to report a dead host
+  is a diagnostic nobody waits for.
+- **`PromptGuard.baseUrl`** — the base URL requests actually go to, after the
+  `/proxy` suffix is applied. Previously only readable from the private config,
+  which meant anything reporting on the client had to guess or re-derive it.
+
 ## [1.11.0] — 2026-08-11
 
 ### Fixed

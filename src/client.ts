@@ -655,6 +655,19 @@ export class PromptGuard {
     this.redteam = new RedTeam(this)
   }
 
+  /**
+   * The base URL requests actually go to, after normalization.
+   *
+   * The constructor appends the `/proxy` suffix when it is missing, so this is
+   * frequently not the string that was passed in. Anything reporting on the
+   * client — `verify()`, a diagnostic, a support dump — has to name the URL
+   * that was called rather than the one that was requested, or it points the
+   * reader somewhere no request ever went.
+   */
+  get baseUrl(): string {
+    return this.config.baseUrl
+  }
+
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = buildRequestUrl(this.config.baseUrl, path)
     let lastError: Error | undefined

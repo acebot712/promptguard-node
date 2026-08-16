@@ -16,6 +16,7 @@ import type {
   AutonomousRedTeamRequest,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  CheckStatus,
   CompletionRequest,
   CompletionResponse,
   EmbeddingRequest,
@@ -33,6 +34,9 @@ import type {
   ScrapeResult,
   SecurityScanResult,
   ToolValidationResult,
+  VerifyCheck,
+  VerifyOptions,
+  VerifyReport,
 } from "../src/index"
 
 describe("README TypeScript Support snippet", () => {
@@ -53,6 +57,19 @@ describe("README TypeScript Support snippet", () => {
       toolCalls: [{ name: "lookup" }],
     }
     const init: InitOptions = { apiKey: "pg_test", maxRetries: 2, retryDelay: 100 }
+    const checkStatus: CheckStatus = "warn"
+    const verifyCheck: VerifyCheck = { name: "connectivity", status: checkStatus, detail: "" }
+    const verifyOpts: VerifyOptions = { apiKey: "pg_test", maxRetries: 1 }
+    const verifyReport: VerifyReport = {
+      ok: true,
+      checks: [verifyCheck],
+      checksPassed: 1,
+      checksFailed: 0,
+      checksWarned: 0,
+      instrumentation: { patched: [], detectedUnpatched: [], adviceUrl: "" },
+      baseUrl: "",
+      sdkVersion: "",
+    }
     const cfg: PromptGuardConfig = { apiKey: "pg_test", maxRetries: 1 }
     const rtReq: AutonomousRedTeamRequest = { budget: 10 }
     const rtRep: AutonomousRedTeamReport = {
@@ -158,5 +175,7 @@ describe("README TypeScript Support snippet", () => {
     expect(chatReq.messages).toHaveLength(5)
     expect(chatResp.model).toBe("gpt-5-nano")
     expect(decision).toBeNull()
+    expect(verifyReport.ok).toBe(true)
+    expect(verifyOpts.maxRetries).toBe(1)
   })
 })

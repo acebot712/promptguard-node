@@ -106,6 +106,62 @@ init({
 });
 ```
 
+### Confirming protection is actually live
+
+`init()` resolving does not mean anything is being scanned. PromptGuard **fails
+open**, so a rejected API key, an unreachable Guard API, or a provider SDK we
+never hooked all leave you with an application that runs perfectly and blocks
+nothing. In a native-ESM app, where the patches may never attach at all (see
+[Limitations](#esm-apps-auto-instrumentation)), that is the default rather than
+the edge case.
+
+`verify()` is the positive check. It makes the real calls and reports what came
+back:
+
+```typescript
+import { verify } from 'promptguard-sdk';
+
+const report = await verify();
+
+if (!report.ok) {
+  for (const check of report.checks) {
+    console.error(`${check.status} ${check.name} — ${check.detail}`);
+  }
+  process.exit(1);
+}
+```
+
+In CI, the one-liner is usually enough:
+
+```typescript
+expect((await verify()).ok).toBe(true);
+```
+
+It checks reachability, authentication, live threat detection and PII redaction,
+plus which provider SDKs this process actually patched — the same checks, under
+the same names, as `promptguard verify` in the CLI and `promptguard.verify()` in
+the Python SDK.
+
+Each check reports `pass`, `warn` or `fail`. **Only a `fail` clears `ok`.** A
+request that never completed is a failure; a request that completed and came
+back permissive — an injection that was not blocked, a PII probe with nothing
+detected — is a warning, because a monitor-mode project legitimately behaves that
+way. Warnings are still the first thing to read before trusting a setup.
+
+`verify()` never rejects for a failed check, so one call reports every problem
+rather than only the first. It throws only when no API key was supplied at all.
+It retries once rather than the client's three times, so a dead host is reported
+in well under a second instead of after the full backoff schedule.
+
+> **Each call makes two real, billed requests.** The probes go through the same
+> endpoints as your production traffic, so every `verify()` writes two rows to
+> your security events — the injection probe among them, which shows up in your
+> dashboard and analytics as a genuine prompt-injection attempt and will trigger
+> any alert you have configured on injection. Both requests count against your
+> plan's quota. That is fine on deploy or at the start of a demo; calling it on
+> every CI build of a busy repo is how you end up with a threat dashboard full of
+> your own probes.
+
 ### Shutdown
 
 ```typescript
@@ -350,7 +406,7 @@ Auto-instrumentation (`init()`) patches the provider modules that Node resolves 
 
 What to do:
 
-- **Verify at runtime** with `getAppliedPatches()` after `init()` — and note that a patch being listed proves the CJS build was patched, not that your ESM imports go through it. `init()` also logs a warning when it applies zero patches.
+- **Verify at runtime** with [`verify()`](#confirming-protection-is-actually-live), which makes real calls and reports what came back, or with `getAppliedPatches()` for the patch list alone — and note that a patch being listed proves the CJS build was patched, not that your ESM imports go through it. `init()` also logs a warning when it applies zero patches.
 - **Prefer the ESM-safe APIs**, which don't rely on module patching:
   - LangChain: `PromptGuardCallbackHandler` (`promptguard-sdk/integrations/langchain`)
   - Vercel AI SDK: `promptGuardMiddleware` (`promptguard-sdk/integrations/vercel-ai`)
@@ -399,6 +455,10 @@ import type {
   AutonomousRedTeamRequest,
   AutonomousRedTeamReport,
   IntelligenceStats,
+  VerifyReport,
+  VerifyCheck,
+  VerifyOptions,
+  CheckStatus,
 } from 'promptguard-sdk';
 ```
 
