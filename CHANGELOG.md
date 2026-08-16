@@ -12,6 +12,8 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-08-16
+
 ### Added
 
 - **`verify()` — a positive check that protection is actually live.** `init()`
