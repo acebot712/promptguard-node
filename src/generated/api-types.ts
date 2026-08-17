@@ -218,7 +218,7 @@ export interface developer__projects__schemas__CreateProjectRequest {
   /** Behaviour when the detection engine errors: 'open' forwards the request, 'closed' rejects it with 503. */
   fail_mode?: "open" | "closed"
   use_case?: string
-  strictness_level?: string
+  strictness_level?: "strict" | "moderate" | "permissive"
 }
 
 export interface developer__projects__schemas__ProjectResponse {
@@ -281,7 +281,10 @@ export interface ErrorEnvelope {
   error: ErrorDetail
 }
 
-/** Optional rich context from framework integrations. */
+/** Optional rich context from framework integrations.
+
+Only ``tool_calls`` is scanned. The rest is descriptive — it labels the
+event for the dashboard and the audit log, and does not reach a detector. */
 export interface GuardContext {
   /** Framework name, e.g. 'langchain', 'crewai' */
   framework?: string | unknown
@@ -291,18 +294,29 @@ export interface GuardContext {
   agent_id?: string | unknown
   /** Session identifier for multi-turn tracking */
   session_id?: string | unknown
-  /** Tool calls in this turn */
+  /** Tool calls in this turn. The tool NAME and its ARGUMENTS are assembled into the scanned text and get the same detection stack as the messages — tool arguments are where an exfiltration payload actually travels, so they are scanned rather than logged. Both provider spellings are read: OpenAI's `{'type':'function','function':{'name','arguments'}}` and Anthropic's `{'type':'tool_use','name','input'}`, plus LangChain's `{'name','args'}`. A call in none of those shapes is reported in the response's `unscanned` array with its position; it is never quietly skipped. */
   tool_calls?: Array<Record<string, unknown>> | unknown
-  /** Arbitrary framework-specific metadata */
+  /** Arbitrary framework-specific metadata (not scanned) */
   metadata?: Record<string, unknown> | unknown
 }
 
-/** A single message in the conversation. */
+/** A single message in the conversation.
+
+``content`` takes either a plain string or a provider-shaped content-block
+array — OpenAI's ``text``/``image_url``/``input_audio``/``file`` and
+Anthropic's ``text``/``image``/``document`` are all understood, because
+those are the two shapes our own proxy already receives.
+
+Blocks are accepted as loose dicts rather than a closed union on purpose.
+Both providers add block types faster than we can model them, and a strict
+schema would 422 a request we could otherwise have scanned the text of.
+Anything unrecognised is *reported* in the response's ``unscanned`` rather
+than dropped — see ``shared.security.content_parts``. */
 export interface GuardMessage {
   /** Message role: system, user, assistant, tool */
   role: string
-  /** Message text content */
-  content?: string
+  /** Message text, or an OpenAI/Anthropic content-block array. Attachments carried in blocks are extracted and scanned like any other text; blocks we cannot read are listed in `unscanned`. */
+  content?: string | Array<Record<string, unknown>>
 }
 
 /** Per-guardrail override the overlay wants to apply.
@@ -344,12 +358,14 @@ export interface GuardResponse {
   weighted_score?: number | unknown
   /** Primary threat type detected */
   threat_type?: string | unknown
-  /** Redacted messages (only present when decision='redact') */
+  /** Redacted messages (only present when decision='redact'). Always the TEXT projection: a message sent as content blocks comes back as a string. Attachments are never rewritten — we do not re-encode a PDF with the secret removed, and returning one that looked redacted would be worse than returning none. */
   redacted_messages?: Array<GuardMessage> | unknown
   /** Detailed threat breakdown */
   threats?: Array<ThreatDetail>
   /** Processing time in milliseconds */
   latency_ms: number
+  /** Parts that reached us and produced nothing to scan. An `allow` with a non-empty `unscanned` is NOT 'this content is clean' — it is 'the text was clean and these parts were never read'. Reasons: url_only (we do not fetch caller-supplied URLs, that would be an SSRF primitive), file_id_unsupported, encrypted, no_text_extracted (a scanned/rasterised document), too_large, undecodable, unsupported_type, extractor_unavailable, unsupported_block, unsupported_tool_call (an entry in `context.tool_calls` in none of the shapes we can read — `index` is its position in that list). */
+  unscanned?: Array<UnscannedAttachment>
 }
 
 export interface HTTPValidationError {
@@ -368,7 +384,7 @@ export interface ManagedPolicyResponse {
 
 /** A media attachment to be scanned for steganographic/adversarial payloads. */
 export interface MediaPartSchema {
-  /** Media type: 'image' or 'audio' */
+  /** Media type: 'image', 'audio' or 'document' */
   type: string
   /** MIME type, e.g. 'image/png', 'audio/wav' */
   mime_type: string
@@ -443,7 +459,7 @@ export interface QuotaErrorEnvelope {
 export interface RedactRequest {
   /** Text to redact */
   content: string
-  /** Specific PII types to redact (default: all) */
+  /** Entity types to redact. Omit to use the policy's configured entities. Accepts detector entity names ('email', 'ssn', 'credit_card', 'phone_us'), the family aliases 'phone', 'ip_address' and 'passport', and 'api_key'. An unrecognized name is rejected rather than ignored. */
   pii_types?: Array<string> | unknown
 }
 
@@ -496,6 +512,16 @@ export interface ThreatDetail {
   details: string
   /** severity_score * confidence, clamped to [0, 1]. The decision-driving number when a severity-carrying detector (e.g. structural heuristics) fired; null when confidence alone is the signal. */
   weighted_score?: number | unknown
+}
+
+/** One part of the request we could not read, and why. */
+export interface UnscannedAttachment {
+  /** Position within the list the reason names — the combined attachment list, or `context.tool_calls` for `unsupported_tool_call`. -1 when the part has no position, which is every `unsupported_block`. */
+  index: number
+  /** Stable machine-readable code */
+  reason: string
+  /** Reason with any extra qualifier, e.g. 'no_text_extracted:pages=3' */
+  detail: string
 }
 
 export interface ValidationError {
