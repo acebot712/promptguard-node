@@ -12,7 +12,27 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
-## [1.12.0] — 2026-08-16
+## [1.13.0] — 2026-08-19
+
+### Changed
+
+- **Generated API types resynced with the published spec.** Three changes reach
+  callers:
+  - `GuardMessage.content` widens from `string` to
+    `string | Array<Record<string, unknown>>`. The API has accepted
+    OpenAI/Anthropic content-block arrays for a while; the types said otherwise,
+    so passing one type-checked as an error. Widening only — existing string
+    callers are unaffected.
+  - `GuardResponse.unscanned` is new (`UnscannedAttachment[]`). It lists the
+    parts of a request that reached the API and produced nothing to scan. Worth
+    reading rather than ignoring: an `allow` with a non-empty `unscanned` means
+    "the text was clean and these parts were never read", not "this content is
+    clean".
+  - `CreateProjectRequest.strictness_level` narrows from `string` to
+    `"strict" | "moderate" | "permissive"`. **This can fail a compile that
+    previously passed** — but only where the value being passed was never
+    accepted by the API in the first place, which the old type let through
+    silently.
 
 ### Added
 
