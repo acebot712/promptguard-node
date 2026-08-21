@@ -324,30 +324,6 @@ Retries use exponential backoff starting from `retryDelay`, with jitter so concu
 
 > **Idempotency caveat:** all requests — including `POST`s — are retried on transient failure. If a request reached the server but the response was lost, the retry re-submits it. Chat/completion/scan calls are safe to re-submit, but each attempt may bill separately; set `maxRetries: 0` if you need strict at-most-once semantics.
 
-## Embeddings
-
-Scan and secure embedding requests through the proxy:
-
-```typescript
-const response = await pg.embeddings.create({
-  model: 'text-embedding-3-small',
-  input: 'The quick brown fox jumps over the lazy dog',
-});
-console.log(response.data[0].embedding.slice(0, 5));
-```
-
-Batch embedding requests are also supported:
-
-```typescript
-const response = await pg.embeddings.create({
-  model: 'text-embedding-3-small',
-  input: ['First document', 'Second document', 'Third document'],
-});
-for (const item of response.data) {
-  console.log(`Index ${item.index}: ${item.embedding.length} dimensions`);
-}
-```
-
 ## AI Agent Security
 
 ```typescript
@@ -471,7 +447,7 @@ import type {
 } from 'promptguard-sdk';
 ```
 
-> **Response fields are camelCase — with one deliberate exception.** The SDK's normalized response objects (the `security`, `redteam`, `agent`, `scrape`, and `guard` namespaces) use camelCase field names (e.g. `report.bypassRate`, `stats.totalPatterns`, `validation.riskScore`, `result.threatsDetected`) regardless of the snake_case wire format — consistent with `GuardDecision` and `SecurityScanResult`. The **OpenAI-compatible** responses (`chat.completions`, `completions`, `embeddings`, i.e. `ChatCompletionResponse`) are the exception: they intentionally preserve OpenAI's snake_case shape (`choices[].finish_reason`, `usage.prompt_tokens`, …) so they stay drop-in compatible with the `openai` client. Request options are camelCase throughout (`maxTokens`, `targetPreset`), including `GuardContext` (`chainName`, `agentId`, `sessionId`, `toolCalls`).
+> **Response fields are camelCase — with one deliberate exception.** The SDK's normalized response objects (the `security`, `redteam`, `agent`, and `guard` namespaces) use camelCase field names (e.g. `report.bypassRate`, `stats.totalPatterns`, `validation.riskScore`) regardless of the snake_case wire format — consistent with `GuardDecision` and `SecurityScanResult`. The **OpenAI-compatible** responses (`chat.completions`, i.e. `ChatCompletionResponse`) are the exception: they intentionally preserve OpenAI's snake_case shape (`choices[].finish_reason`, `usage.prompt_tokens`, …) so they stay drop-in compatible with the `openai` client. Request options are camelCase throughout (`maxTokens`, `targetPreset`), including `GuardContext` (`chainName`, `agentId`, `sessionId`, `toolCalls`).
 
 ## Links
 

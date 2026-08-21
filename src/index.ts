@@ -40,16 +40,11 @@ export {
 export type {
   ChatCompletionRequest,
   ChatCompletionResponse,
-  CompletionRequest,
-  CompletionResponse,
-  EmbeddingRequest,
-  EmbeddingResponse,
   Message,
   PromptGuardConfig,
   RedactResult,
   RedTeamSummary,
   RedTeamTestResult,
-  ScrapeResult,
   SecurityScanResult,
   ToolValidationResult,
 } from "./client"

@@ -80,65 +80,6 @@ export interface ChatCompletionResponse {
   }
 }
 
-export interface CompletionRequest {
-  model: string
-  prompt: string
-  temperature?: number
-  /** Maximum tokens to generate. Serialized to the wire as `max_tokens`. */
-  maxTokens?: number
-  /**
-   * OpenAI-compatible escape hatch: any additional keys are forwarded verbatim
-   * to the proxy. Because these keys are not type-checked, a misspelled
-   * parameter is silently passed through rather than flagged at compile time.
-   * (`stream: true` is rejected at runtime — the client parses a single JSON
-   * response body.)
-   */
-  [key: string]: unknown
-}
-
-export interface CompletionResponse {
-  id: string
-  object: string
-  created: number
-  model: string
-  choices: Array<{
-    text: string
-    index: number
-    finish_reason: string
-  }>
-  usage?: {
-    prompt_tokens: number
-    completion_tokens: number
-    total_tokens: number
-  }
-}
-
-export interface EmbeddingRequest {
-  model: string
-  input: string | string[]
-  /**
-   * OpenAI-compatible escape hatch: any additional keys (e.g. `dimensions`,
-   * `encoding_format`, `user`) are forwarded verbatim to the proxy. Because
-   * these keys are not type-checked, a misspelled parameter is silently passed
-   * through rather than flagged at compile time.
-   */
-  [key: string]: unknown
-}
-
-export interface EmbeddingResponse {
-  object: string
-  data: Array<{
-    object: string
-    embedding: number[]
-    index: number
-  }>
-  model: string
-  usage?: {
-    prompt_tokens: number
-    total_tokens: number
-  }
-}
-
 export interface SecurityScanResult {
   blocked: boolean
   decision: "allow" | "block" | "redact"
@@ -151,15 +92,6 @@ export interface RedactResult {
   original: string
   redacted: string
   piiFound: string[]
-}
-
-export interface ScrapeResult {
-  url: string
-  status: "safe" | "blocked"
-  content: string
-  /** Normalized from the wire field `threats_detected`. */
-  threatsDetected: string[]
-  message?: string
 }
 
 export interface ToolValidationResult {
@@ -206,14 +138,6 @@ export interface RedTeamSummary {
 // SDK-wide (matching GuardDecision and SecurityScanResult). The wire format is
 // unchanged — only the SDK-facing DTO is camelCased.
 
-interface ScrapeResultWire {
-  url: string
-  status: "safe" | "blocked"
-  content: string
-  threats_detected?: string[]
-  message?: string
-}
-
 interface ToolValidationResultWire {
   allowed: boolean
   risk_score: number
@@ -240,16 +164,6 @@ interface RedTeamSummaryWire {
   allowed: number
   block_rate: number
   results?: RedTeamTestResultWire[]
-}
-
-function toScrapeResult(w: ScrapeResultWire): ScrapeResult {
-  return {
-    url: w.url,
-    status: w.status,
-    content: w.content,
-    threatsDetected: w.threats_detected ?? [],
-    message: w.message,
-  }
 }
 
 function toToolValidationResult(w: ToolValidationResultWire): ToolValidationResult {
@@ -388,30 +302,6 @@ class Chat {
   }
 }
 
-class Completions {
-  private client: PromptGuard
-  constructor(client: PromptGuard) {
-    this.client = client
-  }
-  async create(params: CompletionRequest): Promise<CompletionResponse> {
-    return this.client.request<CompletionResponse>(
-      "POST",
-      "/completions",
-      serializeCompletionParams(params),
-    )
-  }
-}
-
-class Embeddings {
-  private client: PromptGuard
-  constructor(client: PromptGuard) {
-    this.client = client
-  }
-  async create(params: EmbeddingRequest): Promise<EmbeddingResponse> {
-    return this.client.request<EmbeddingResponse>("POST", "/embeddings", params)
-  }
-}
-
 class Security {
   private client: PromptGuard
   constructor(client: PromptGuard) {
@@ -425,34 +315,6 @@ class Security {
       content,
       pii_types: piiTypes,
     })
-  }
-}
-
-class Scrape {
-  private client: PromptGuard
-  constructor(client: PromptGuard) {
-    this.client = client
-  }
-  async url(
-    url: string,
-    options?: { renderJs?: boolean; extractText?: boolean; timeout?: number },
-  ): Promise<ScrapeResult> {
-    const raw = await this.client.request<ScrapeResultWire>("POST", "/scrape", {
-      url,
-      render_js: options?.renderJs ?? false,
-      extract_text: options?.extractText ?? true,
-      timeout: options?.timeout ?? 30,
-    })
-    return toScrapeResult(raw)
-  }
-  async batch(urls: string[], options?: Record<string, unknown>): Promise<{ jobId: string }> {
-    // Normalize the wire field `job_id` → `jobId` so the scrape namespace is
-    // camelCase throughout (consistent with `url()`'s ScrapeResult).
-    const raw = await this.client.request<{ job_id: string }>("POST", "/scrape/batch", {
-      urls,
-      ...options,
-    })
-    return { jobId: raw.job_id }
   }
 }
 
@@ -545,10 +407,7 @@ export class PromptGuard {
   private config: Required<PromptGuardConfig>
 
   chat: Chat
-  completions: Completions
-  embeddings: Embeddings
   security: Security
-  scrape: Scrape
   agent: Agent
   redteam: RedTeam
 
@@ -566,10 +425,7 @@ export class PromptGuard {
     }
 
     this.chat = new Chat(this)
-    this.completions = new Completions(this)
-    this.embeddings = new Embeddings(this)
     this.security = new Security(this)
-    this.scrape = new Scrape(this)
     this.agent = new Agent(this)
     this.redteam = new RedTeam(this)
   }

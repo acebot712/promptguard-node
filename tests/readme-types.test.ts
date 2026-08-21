@@ -15,10 +15,6 @@ import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
   CheckStatus,
-  CompletionRequest,
-  CompletionResponse,
-  EmbeddingRequest,
-  EmbeddingResponse,
   GuardContext,
   GuardDecision,
   GuardMessage,
@@ -28,7 +24,6 @@ import type {
   RedactResult,
   RedTeamSummary,
   RedTeamTestResult,
-  ScrapeResult,
   SecurityScanResult,
   ToolValidationResult,
   VerifyCheck,
@@ -92,22 +87,6 @@ describe("README TypeScript Support snippet", () => {
       blockRate: 0,
       results: [],
     }
-    const scrape: ScrapeResult = {
-      url: "https://x",
-      status: "safe",
-      content: "",
-      threatsDetected: [],
-    }
-    const embReq: EmbeddingRequest = { model: "m", input: "x" }
-    const embResp: EmbeddingResponse = { object: "list", data: [], model: "m" }
-    const compReq: CompletionRequest = { model: "m", prompt: "p" }
-    const compResp: CompletionResponse = {
-      id: "1",
-      object: "text_completion",
-      created: 0,
-      model: "m",
-      choices: [],
-    }
 
     // Message role union must accept tool-calling roles (finding 6).
     const toolMsg: Message = { role: "tool", content: "result" }
@@ -144,11 +123,6 @@ describe("README TypeScript Support snippet", () => {
     expect(tool.allowed).toBe(true)
     expect(rtTest.decision).toBe("allow")
     expect(rtSummary.totalTests).toBe(0)
-    expect(scrape.status).toBe("safe")
-    expect(embReq.model).toBe("m")
-    expect(embResp.model).toBe("m")
-    expect(compReq.model).toBe("m")
-    expect(compResp.model).toBe("m")
     expect(toolMsg.role).toBe("tool")
     expect(fnMsg.role).toBe("function")
     expect(chatReq.messages).toHaveLength(5)
