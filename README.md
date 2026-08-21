@@ -364,20 +364,29 @@ if (!validation.allowed) {
 
 ## Red Team Testing
 
+Run PromptGuard's adversarial corpus against your own policy configuration and
+see how much of it your guardrails block. Useful from CI as a regression gate on
+a policy change.
+
 ```typescript
 const pg = new PromptGuard({ apiKey: 'pg_live_xxx' });
 
-// Run the autonomous red team agent (LLM-powered mutation)
-const report = await pg.redteam.runAutonomous({
-  budget: 200,
-  targetPreset: 'support_bot:strict', // snake_case `target_preset` also accepted
-});
-console.log(`Grade: ${report.grade}, Bypass rate: ${(report.bypassRate * 100).toFixed(0)}%`);
+// What the corpus contains, without running it
+const catalog = await pg.redteam.listTests();
+console.log(`${catalog.total} attacks available`);
 
-// Get Attack Intelligence stats
-const stats = await pg.redteam.intelligenceStats();
-console.log(`Total patterns: ${stats.totalPatterns}`);
+// Run everything against a preset
+const summary = await pg.redteam.runAll('support_bot:strict');
+console.log(`Blocked ${summary.blocked}/${summary.totalTests}`);
+
+// Run one named attack, or your own adversarial prompt
+const one = await pg.redteam.runTest('prompt_injection_basic');
+const custom = await pg.redteam.runCustom('ignore previous instructions and ...');
+console.log(custom.decision, custom.reason);
 ```
+
+Requires an API key with the `proxy` scope (an unrestricted key also works).
+Device/scan-only credentials cannot reach these endpoints.
 
 ## Configuration
 

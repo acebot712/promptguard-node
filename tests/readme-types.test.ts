@@ -12,8 +12,6 @@
  */
 
 import type {
-  AutonomousRedTeamReport,
-  AutonomousRedTeamRequest,
   ChatCompletionRequest,
   ChatCompletionResponse,
   CheckStatus,
@@ -25,7 +23,6 @@ import type {
   GuardDecision,
   GuardMessage,
   InitOptions,
-  IntelligenceStats,
   Message,
   PromptGuardConfig,
   RedactResult,
@@ -71,21 +68,6 @@ describe("README TypeScript Support snippet", () => {
       sdkVersion: "",
     }
     const cfg: PromptGuardConfig = { apiKey: "pg_test", maxRetries: 1 }
-    const rtReq: AutonomousRedTeamRequest = { budget: 10 }
-    const rtRep: AutonomousRedTeamReport = {
-      grade: "A",
-      bypassRate: 0,
-      totalAttempts: 0,
-      bypassesFound: 0,
-      bypasses: [],
-      recommendations: [],
-    }
-    const stats: IntelligenceStats = {
-      totalPatterns: 0,
-      byCategory: {},
-      bySeverity: {},
-      recentDiscoveries: 0,
-    }
     const tool: ToolValidationResult = {
       allowed: true,
       riskScore: 0,
@@ -159,9 +141,6 @@ describe("README TypeScript Support snippet", () => {
     expect(ctx.chainName).toBe("chain")
     expect(init.maxRetries).toBe(2)
     expect(cfg.maxRetries).toBe(1)
-    expect(rtReq.budget).toBe(10)
-    expect(rtRep.grade).toBe("A")
-    expect(stats.totalPatterns).toBe(0)
     expect(tool.allowed).toBe(true)
     expect(rtTest.decision).toBe("allow")
     expect(rtSummary.totalTests).toBe(0)

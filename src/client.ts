@@ -197,41 +197,6 @@ export interface RedTeamSummary {
   results: RedTeamTestResult[]
 }
 
-export interface AutonomousRedTeamRequest {
-  budget?: number
-  /** Target preset to attack (camelCase, preferred). */
-  targetPreset?: string
-  /** Detectors to enable for the run (camelCase, preferred). */
-  enabledDetectors?: string[]
-  /** @deprecated snake_case alias for `targetPreset`; kept for back-compat. */
-  target_preset?: string
-  /** @deprecated snake_case alias for `enabledDetectors`; kept for back-compat. */
-  enabled_detectors?: string[]
-}
-
-export interface AutonomousRedTeamReport {
-  grade: string
-  /** Normalized from the wire field `bypass_rate`. */
-  bypassRate: number
-  /** Normalized from the wire field `total_attempts`. */
-  totalAttempts: number
-  /** Normalized from the wire field `bypasses_found`. */
-  bypassesFound: number
-  bypasses: Array<Record<string, unknown>>
-  recommendations: string[]
-}
-
-export interface IntelligenceStats {
-  /** Normalized from the wire field `total_patterns`. */
-  totalPatterns: number
-  /** Normalized from the wire field `by_category`. */
-  byCategory: Record<string, number>
-  /** Normalized from the wire field `by_severity`. */
-  bySeverity: Record<string, number>
-  /** Normalized from the wire field `recent_discoveries`. */
-  recentDiscoveries: number
-}
-
 // ---------------------------------------------------------------------------
 // Wire response shapes (internal) + camelCase normalizers
 // ---------------------------------------------------------------------------
@@ -277,22 +242,6 @@ interface RedTeamSummaryWire {
   results?: RedTeamTestResultWire[]
 }
 
-interface AutonomousRedTeamReportWire {
-  grade: string
-  bypass_rate: number
-  total_attempts: number
-  bypasses_found: number
-  bypasses?: Array<Record<string, unknown>>
-  recommendations?: string[]
-}
-
-interface IntelligenceStatsWire {
-  total_patterns: number
-  by_category?: Record<string, number>
-  by_severity?: Record<string, number>
-  recent_discoveries: number
-}
-
 function toScrapeResult(w: ScrapeResultWire): ScrapeResult {
   return {
     url: w.url,
@@ -334,26 +283,6 @@ function toRedTeamSummary(w: RedTeamSummaryWire): RedTeamSummary {
     allowed: w.allowed,
     blockRate: w.block_rate,
     results: (w.results ?? []).map(toRedTeamTestResult),
-  }
-}
-
-function toAutonomousRedTeamReport(w: AutonomousRedTeamReportWire): AutonomousRedTeamReport {
-  return {
-    grade: w.grade,
-    bypassRate: w.bypass_rate,
-    totalAttempts: w.total_attempts,
-    bypassesFound: w.bypasses_found,
-    bypasses: w.bypasses ?? [],
-    recommendations: w.recommendations ?? [],
-  }
-}
-
-function toIntelligenceStats(w: IntelligenceStatsWire): IntelligenceStats {
-  return {
-    totalPatterns: w.total_patterns,
-    byCategory: w.by_category ?? {},
-    bySeverity: w.by_severity ?? {},
-    recentDiscoveries: w.recent_discoveries,
   }
 }
 
@@ -557,9 +486,21 @@ class Agent {
   }
 }
 
+/**
+ * Run the adversarial corpus against your own policy configuration.
+ *
+ * Every method here used to target `/internal/redteam`, which requires
+ * platform-admin auth -- so all of them returned 401 for every customer who
+ * called them. The customer-facing plane is `/api/v1/security-testing`,
+ * reachable with an ordinary API key carrying the `proxy` scope.
+ *
+ * `runAutonomous` and `intelligenceStats` were removed rather than repointed:
+ * the autonomous mutation loop is a cost-attack surface and stays back-office,
+ * and `/intelligence/stats` exists on no plane at all (a 404 even for admins).
+ */
 class RedTeam {
   private client: PromptGuard
-  private base = "/internal/redteam"
+  private base = "/security-testing"
 
   constructor(client: PromptGuard) {
     this.client = client
@@ -570,7 +511,7 @@ class RedTeam {
   async runTest(testName: string, targetPreset = "default"): Promise<RedTeamTestResult> {
     const raw = await this.client.request<RedTeamTestResultWire>(
       "POST",
-      `${this.base}/test/${encodeURIComponent(testName)}`,
+      `${this.base}/run/${encodeURIComponent(testName)}`,
       {
         target_preset: targetPreset,
       },
@@ -578,7 +519,7 @@ class RedTeam {
     return toRedTeamTestResult(raw)
   }
   async runAll(targetPreset = "default"): Promise<RedTeamSummary> {
-    const raw = await this.client.request<RedTeamSummaryWire>("POST", `${this.base}/test-all`, {
+    const raw = await this.client.request<RedTeamSummaryWire>("POST", `${this.base}/run-all`, {
       target_preset: targetPreset,
     })
     return toRedTeamSummary(raw)
@@ -586,35 +527,13 @@ class RedTeam {
   async runCustom(prompt: string, targetPreset = "default"): Promise<RedTeamTestResult> {
     const raw = await this.client.request<RedTeamTestResultWire>(
       "POST",
-      `${this.base}/test-custom`,
+      `${this.base}/run-custom`,
       {
         custom_prompt: prompt,
         target_preset: targetPreset,
       },
     )
     return toRedTeamTestResult(raw)
-  }
-  async runAutonomous(options?: AutonomousRedTeamRequest): Promise<AutonomousRedTeamReport> {
-    // Accept camelCase (preferred) with snake_case aliases for back-compat.
-    const targetPreset = options?.targetPreset ?? options?.target_preset ?? "default"
-    const enabledDetectors = options?.enabledDetectors ?? options?.enabled_detectors
-    const raw = await this.client.request<AutonomousRedTeamReportWire>(
-      "POST",
-      `${this.base}/autonomous`,
-      {
-        budget: options?.budget ?? 100,
-        target_preset: targetPreset,
-        ...(enabledDetectors && { enabled_detectors: enabledDetectors }),
-      },
-    )
-    return toAutonomousRedTeamReport(raw)
-  }
-  async intelligenceStats(): Promise<IntelligenceStats> {
-    const raw = await this.client.request<IntelligenceStatsWire>(
-      "GET",
-      `${this.base}/intelligence/stats`,
-    )
-    return toIntelligenceStats(raw)
   }
 }
 
