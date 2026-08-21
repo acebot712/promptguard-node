@@ -38,21 +38,13 @@ export {
 } from "./auto"
 // Proxy client types (for `import type { ... } from 'promptguard-sdk'`)
 export type {
-  AutonomousRedTeamReport,
-  AutonomousRedTeamRequest,
   ChatCompletionRequest,
   ChatCompletionResponse,
-  CompletionRequest,
-  CompletionResponse,
-  EmbeddingRequest,
-  EmbeddingResponse,
-  IntelligenceStats,
   Message,
   PromptGuardConfig,
   RedactResult,
   RedTeamSummary,
   RedTeamTestResult,
-  ScrapeResult,
   SecurityScanResult,
   ToolValidationResult,
 } from "./client"

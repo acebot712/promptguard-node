@@ -12,26 +12,18 @@
  */
 
 import type {
-  AutonomousRedTeamReport,
-  AutonomousRedTeamRequest,
   ChatCompletionRequest,
   ChatCompletionResponse,
   CheckStatus,
-  CompletionRequest,
-  CompletionResponse,
-  EmbeddingRequest,
-  EmbeddingResponse,
   GuardContext,
   GuardDecision,
   GuardMessage,
   InitOptions,
-  IntelligenceStats,
   Message,
   PromptGuardConfig,
   RedactResult,
   RedTeamSummary,
   RedTeamTestResult,
-  ScrapeResult,
   SecurityScanResult,
   ToolValidationResult,
   VerifyCheck,
@@ -71,21 +63,6 @@ describe("README TypeScript Support snippet", () => {
       sdkVersion: "",
     }
     const cfg: PromptGuardConfig = { apiKey: "pg_test", maxRetries: 1 }
-    const rtReq: AutonomousRedTeamRequest = { budget: 10 }
-    const rtRep: AutonomousRedTeamReport = {
-      grade: "A",
-      bypassRate: 0,
-      totalAttempts: 0,
-      bypassesFound: 0,
-      bypasses: [],
-      recommendations: [],
-    }
-    const stats: IntelligenceStats = {
-      totalPatterns: 0,
-      byCategory: {},
-      bySeverity: {},
-      recentDiscoveries: 0,
-    }
     const tool: ToolValidationResult = {
       allowed: true,
       riskScore: 0,
@@ -109,22 +86,6 @@ describe("README TypeScript Support snippet", () => {
       allowed: 0,
       blockRate: 0,
       results: [],
-    }
-    const scrape: ScrapeResult = {
-      url: "https://x",
-      status: "safe",
-      content: "",
-      threatsDetected: [],
-    }
-    const embReq: EmbeddingRequest = { model: "m", input: "x" }
-    const embResp: EmbeddingResponse = { object: "list", data: [], model: "m" }
-    const compReq: CompletionRequest = { model: "m", prompt: "p" }
-    const compResp: CompletionResponse = {
-      id: "1",
-      object: "text_completion",
-      created: 0,
-      model: "m",
-      choices: [],
     }
 
     // Message role union must accept tool-calling roles (finding 6).
@@ -159,17 +120,9 @@ describe("README TypeScript Support snippet", () => {
     expect(ctx.chainName).toBe("chain")
     expect(init.maxRetries).toBe(2)
     expect(cfg.maxRetries).toBe(1)
-    expect(rtReq.budget).toBe(10)
-    expect(rtRep.grade).toBe("A")
-    expect(stats.totalPatterns).toBe(0)
     expect(tool.allowed).toBe(true)
     expect(rtTest.decision).toBe("allow")
     expect(rtSummary.totalTests).toBe(0)
-    expect(scrape.status).toBe("safe")
-    expect(embReq.model).toBe("m")
-    expect(embResp.model).toBe("m")
-    expect(compReq.model).toBe("m")
-    expect(compResp.model).toBe("m")
     expect(toolMsg.role).toBe("tool")
     expect(fnMsg.role).toBe("function")
     expect(chatReq.messages).toHaveLength(5)

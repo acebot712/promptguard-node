@@ -59,22 +59,9 @@ describe("PromptGuard namespaces", () => {
     expect(typeof pg.chat.completions.create).toBe("function")
   })
 
-  test("has completions.create", () => {
-    expect(typeof pg.completions.create).toBe("function")
-  })
-
-  test("has embeddings.create", () => {
-    expect(typeof pg.embeddings.create).toBe("function")
-  })
-
   test("has security.scan and redact", () => {
     expect(typeof pg.security.scan).toBe("function")
     expect(typeof pg.security.redact).toBe("function")
-  })
-
-  test("has scrape.url and batch", () => {
-    expect(typeof pg.scrape.url).toBe("function")
-    expect(typeof pg.scrape.batch).toBe("function")
   })
 
   test("has agent.validateTool and stats", () => {
@@ -92,58 +79,11 @@ describe("PromptGuard namespaces", () => {
 
 // ── Completions API ──────────────────────────────────────────────────
 
-describe("Completions.create", () => {
-  test("calls POST /completions", async () => {
-    const mockData = { id: "cmpl-1", choices: [{ text: "hello" }] }
-    global.fetch = mockFetchOk(mockData)
-    const pg = makeClient()
-
-    const result = await pg.completions.create({
-      model: "gpt-5-nano",
-      prompt: "Say hello",
-    })
-
-    expect(result).toEqual(mockData)
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/completions"),
-      expect.objectContaining({ method: "POST" }),
-    )
-  })
-})
+describe("Completions.create", () => {})
 
 // ── Embeddings API ───────────────────────────────────────────────────
 
-describe("Embeddings.create", () => {
-  test("calls POST /embeddings", async () => {
-    const mockData = { data: [{ embedding: [0.1, 0.2] }] }
-    global.fetch = mockFetchOk(mockData)
-    const pg = makeClient()
-
-    const result = await pg.embeddings.create({
-      model: "text-embedding-3-small",
-      input: "hello world",
-    })
-
-    expect(result).toEqual(mockData)
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("/embeddings"),
-      expect.objectContaining({ method: "POST" }),
-    )
-  })
-
-  test("supports array input", async () => {
-    global.fetch = mockFetchOk({ data: [] })
-    const pg = makeClient()
-
-    await pg.embeddings.create({
-      model: "text-embedding-3-small",
-      input: ["hello", "world"],
-    })
-
-    const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body)
-    expect(body.input).toEqual(["hello", "world"])
-  })
-})
+describe("Embeddings.create", () => {})
 
 // ── Wire serialization ───────────────────────────────────────────────
 
@@ -160,17 +100,6 @@ describe("Completion param serialization", () => {
 
     const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body)
     expect(body.max_tokens).toBe(128)
-    expect(body.maxTokens).toBeUndefined()
-  })
-
-  test("completions: maxTokens is sent as max_tokens", async () => {
-    global.fetch = mockFetchOk({ id: "c2", choices: [] })
-    const pg = makeClient()
-
-    await pg.completions.create({ model: "gpt-5-nano", prompt: "hi", maxTokens: 64 })
-
-    const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body)
-    expect(body.max_tokens).toBe(64)
     expect(body.maxTokens).toBeUndefined()
   })
 
@@ -576,5 +505,22 @@ describe("Quota error parsing", () => {
       expect(e.requestsUsed).toBe(10000)
       expect(e.requestsLimit).toBe(10000)
     }
+  })
+})
+
+describe("removed namespaces stay removed", () => {
+  // scrape, embeddings and completions called routes that do not exist.
+  // /api/v1/scrape and /api/v1/completions were deleted from the backend on
+  // 2026-02-18 and nobody updated the SDK; /api/v1/embeddings was never built
+  // at all. All three 404'd for every caller.
+  const client = new PromptGuard({ apiKey: "pg_live_test" }) as unknown as Record<string, unknown>
+
+  test.each(["scrape", "embeddings", "completions"])("%s is gone", (ns) => {
+    expect(client[ns]).toBeUndefined()
+  })
+
+  test("chat.completions is untouched", () => {
+    const live = new PromptGuard({ apiKey: "pg_live_test" })
+    expect(typeof live.chat.completions.create).toBe("function")
   })
 })
