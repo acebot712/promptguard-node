@@ -74,3 +74,17 @@ Always run `npm run check` and `npm run format` after editing TypeScript files.
 - Add heavyweight runtime dependencies
 - Break the public API without a major version bump
 - Modify the contract test spec without coordinating with the Python SDK
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues, worked via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, each label string equal to its name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` plus `docs/adr/` at the repo root, both created lazily. See `docs/agents/domain.md`.
