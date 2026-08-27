@@ -29,7 +29,17 @@ dist/                  # Compiled output (not committed)
 
 ```bash
 npm install
+pre-commit install          # tracked git hooks; once per clone
 ```
+
+`pre-commit install` wires both stages. The push stage runs one thing: a
+gitleaks scan of the commits you are pushing. It is scoped to that range on
+purpose — this package is published to npm and the repo is public, so a
+credential reaching `main` is world-readable at once, while scanning the whole
+tree or the history fails on its first run and teaches everyone `--no-verify`.
+CI here runs no secret scanning, so this hook is the only one there is. A
+fixture that is meant to look like a credential belongs in `.gitleaks.toml`,
+not behind a bypass.
 
 ## Building and Testing
 
