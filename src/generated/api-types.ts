@@ -330,6 +330,30 @@ export interface GuardrailDelta {
   threshold?: number | unknown
 }
 
+/** Full per-guardrail configuration for a project. */
+export interface GuardrailsConfig {
+  prompt_injection?: LevelConfig
+  pii_detection?: PIIDetectionConfig
+  toxicity?: ToxicityConfig
+  data_exfiltration?: LevelConfig
+  secret_key_detection?: LevelConfig
+  url_filtering?: ToggleOnlyConfig
+  fraud_detection?: ToggleOnlyConfig
+  malware_detection?: ToggleOnlyConfig
+  jailbreak_detection?: ToggleOnlyConfig
+  tool_injection?: ToggleOnlyConfig
+  hallucination?: HallucinationConfig
+  mcp_security?: MCPSecurityConfig
+}
+
+export interface GuardrailsResponse {
+  guardrails: GuardrailsConfig
+}
+
+export interface GuardrailsUpdateRequest {
+  guardrails: GuardrailsConfig
+}
+
 /** Request body for the guard endpoint. */
 export interface GuardRequest {
   /** Messages to scan (OpenAI-style message array) */
@@ -368,8 +392,20 @@ export interface GuardResponse {
   unscanned?: Array<UnscannedAttachment>
 }
 
+export interface HallucinationConfig {
+  enabled?: boolean
+  action?: "metadata" | "flag" | "block"
+  block_threshold?: number
+}
+
 export interface HTTPValidationError {
   detail?: Array<ValidationError>
+}
+
+/** Guardrail with a strict/moderate/permissive sensitivity level. */
+export interface LevelConfig {
+  enabled?: boolean
+  level?: "strict" | "moderate" | "permissive"
 }
 
 /** The managed update policy an enrolled Shadow AI device should apply.
@@ -380,6 +416,14 @@ export interface ManagedPolicyResponse {
   force_update_mode?: string | unknown
   pinned_channel?: string | unknown
   min_version_override?: string | unknown
+}
+
+export interface MCPSecurityConfig {
+  enabled?: boolean
+  server_allowlist?: Array<string>
+  server_blocklist?: Array<string>
+  enforce_schema_validation?: boolean
+  max_argument_size_bytes?: number
 }
 
 /** A media attachment to be scanned for steganographic/adversarial payloads. */
@@ -437,6 +481,13 @@ export interface OverlayWarningOut {
   field: string
   message: string
   severity: "warning" | "critical"
+}
+
+export interface PIIDetectionConfig {
+  enabled?: boolean
+  level?: "strict" | "moderate" | "permissive"
+  mode?: "redact" | "mask" | "block"
+  entities?: Array<string> | unknown
 }
 
 export interface QuotaErrorDetail {
@@ -505,6 +556,47 @@ export interface ShadowReportOut {
   examples: Record<string, unknown>
 }
 
+/** What a caller can run -- so a CLI can list before it picks. */
+export interface TestCatalog {
+  total: number
+  tests: Array<TestInfo>
+}
+
+/** One attack in the corpus, without running it. */
+export interface TestInfo {
+  name: string
+  category: string
+  description: string
+  expected_result: string
+}
+
+/** Body for run-all (where custom_prompt is ignored) and run-custom. */
+export interface TestRequest {
+  custom_prompt?: string | unknown
+  target_preset?: string
+}
+
+/** One attack prompt and what the policy engine decided about it. */
+export interface TestResponse {
+  test_name: string
+  prompt: string
+  decision: string
+  reason: string
+  threat_type: string | unknown
+  confidence: number | unknown
+  blocked: boolean
+}
+
+/** The whole corpus, plus the block rate that is the headline number. */
+export interface TestSummary {
+  total_tests: number
+  blocked: number
+  allowed: number
+  /** blocked / total_tests; 0.0 for an empty corpus, never a divide-by-zero. */
+  block_rate: number
+  results: Array<TestResponse>
+}
+
 /** Individual threat found during scanning. */
 export interface ThreatDetail {
   type: string
@@ -512,6 +604,16 @@ export interface ThreatDetail {
   details: string
   /** severity_score * confidence, clamped to [0, 1]. The decision-driving number when a severity-carrying detector (e.g. structural heuristics) fired; null when confidence alone is the signal. */
   weighted_score?: number | unknown
+}
+
+export interface ToggleOnlyConfig {
+  enabled?: boolean
+}
+
+export interface ToxicityConfig {
+  enabled?: boolean
+  threshold?: number
+  categories?: Array<string> | unknown
 }
 
 /** One part of the request we could not read, and why. */
