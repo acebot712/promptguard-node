@@ -12,6 +12,33 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-08-24
+
+### Fixed
+
+- **The red team client was unreachable for every customer.** Every method on
+  `pg.redteam` targeted `/internal/redteam`, which is the platform-admin plane
+  and rejects an API key outright — so the namespace could not have worked for
+  anyone holding a `pg_live_` key, whatever they did. It now targets the
+  customer-facing `/api/v1/security-testing`.
+
+### Removed
+
+- **BREAKING — three namespaces that could only ever 404 are gone**, along with
+  the types that described them. `pg.completions`, `pg.embeddings` and
+  `pg.scrape` called endpoints the API does not serve, as did
+  `pg.redteam.runAutonomous()` and `pg.redteam.intelligenceStats()`. Nothing
+  that worked has been taken away — but this is a major version because the
+  removed **types** were exported, so code that merely `import type`s them
+  compiles today and will not after: `AutonomousRedTeamReport`,
+  `AutonomousRedTeamRequest`, `CompletionRequest`, `CompletionResponse`,
+  `EmbeddingRequest`, `EmbeddingResponse`, `IntelligenceStats`, `ScrapeResult`.
+
+  If you are affected, the fix is to delete the import — there is no
+  replacement, because there was never a working implementation behind it. For
+  chat traffic, use `pg.chat.completions.create(...)`, which is unchanged.
+
+
 ## [1.13.0] — 2026-08-19
 
 ### Changed
