@@ -118,14 +118,6 @@ export interface AgentTraceResponse {
   event_id: string
 }
 
-/** Response containing the full API key for copy functionality */
-export interface ApiKeyFullResponse {
-  id: string
-  name: string
-  prefix: string
-  key: string
-}
-
 export interface ApiKeyResponse {
   id: string
   name: string
@@ -219,17 +211,6 @@ export interface developer__projects__schemas__CreateProjectRequest {
   fail_mode?: "open" | "closed"
   use_case?: string
   strictness_level?: "strict" | "moderate" | "permissive"
-}
-
-export interface developer__projects__schemas__ProjectResponse {
-  id: string
-  name: string
-  description: string | unknown
-  fail_mode: string
-  use_case: string
-  strictness_level: string
-  zero_retention?: boolean
-  created_at: string
 }
 
 export interface DivergenceItemOut {
@@ -342,6 +323,7 @@ export interface GuardrailsConfig {
   malware_detection?: ToggleOnlyConfig
   jailbreak_detection?: ToggleOnlyConfig
   tool_injection?: ToggleOnlyConfig
+  multi_turn_drift?: ToggleOnlyConfig
   hallucination?: HallucinationConfig
   mcp_security?: MCPSecurityConfig
 }
@@ -409,7 +391,7 @@ export interface LevelConfig {
 }
 
 /** The managed update policy an enrolled Shadow AI device should apply.
-``fleet`` reflects the org's ``shadow_ai_fleet`` entitlement; when false the
+``fleet`` reflects the org's ``shadow_fleet_management`` entitlement; when false the
 other fields are null and the device keeps its local user preference. */
 export interface ManagedPolicyResponse {
   fleet?: boolean
@@ -486,8 +468,19 @@ export interface OverlayWarningOut {
 export interface PIIDetectionConfig {
   enabled?: boolean
   level?: "strict" | "moderate" | "permissive"
-  mode?: "redact" | "mask" | "block"
+  mode?: "redact" | "mask" | "block" | "tokenize"
   entities?: Array<string> | unknown
+}
+
+export interface ProjectResponse {
+  id: string
+  name: string
+  description: string | unknown
+  fail_mode: string
+  use_case: string
+  strictness_level: string
+  zero_retention?: boolean
+  created_at: string
 }
 
 export interface QuotaErrorDetail {
@@ -570,7 +563,15 @@ export interface TestInfo {
   expected_result: string
 }
 
-/** Body for run-all (where custom_prompt is ignored) and run-custom. */
+/** Body for run-all (where custom_prompt is ignored) and run-custom.
+
+``target_preset`` is either the literal ``"default"`` (the wire default,
+resolved as the "default" use case at "moderate" strictness) or a composed
+``"use_case:strictness"`` pair -- the vocabularies served by
+``GET /dashboard/presets/use-cases`` and ``GET /dashboard/presets/
+strictness-levels``. Anything else is rejected with a 422; it used to be
+silently substituted with the default engine, which made every preset
+selector a no-op. */
 export interface TestRequest {
   custom_prompt?: string | unknown
   target_preset?: string
@@ -592,8 +593,10 @@ export interface TestSummary {
   total_tests: number
   blocked: number
   allowed: number
-  /** blocked / total_tests; 0.0 for an empty corpus, never a divide-by-zero. */
+  /** blocked / total_tests over COMPLETED probes; 0.0 for an empty corpus, never a divide-by-zero. Errored probes are excluded from total_tests. */
   block_rate: number
+  /** Probes the engine could not complete (the evaluator raised). Excluded from total_tests and the block rate; a CI caller can fail on this to catch 'the scan did not complete' rather than mistaking it for a pass. */
+  errors?: number
   results: Array<TestResponse>
 }
 
