@@ -245,6 +245,19 @@ function isInstalled(pkg: string): boolean {
 }
 
 /** Provider packages that are installed but are NOT being scanned. */
+/**
+ * Every provider-patch name this SDK is capable of reporting in `patched`.
+ *
+ * Not re-exported from `index.ts`: the package's public surface is unchanged,
+ * and this mirrors the Python SDK's private `_known_patches()`. It exists so
+ * the cross-SDK contract's `instrumentation_introspection` section can assert
+ * that both SDKs name the same providers — they did not, until v1.6.0 of the
+ * contract: this SDK reported `bedrock` while Python reported `boto3-bedrock`.
+ */
+export function knownPatchNames(): string[] {
+  return PATCH_MODULES.map((m) => m.name)
+}
+
 export function detectedUnpatched(): string[] {
   const hooked = new Set(getAppliedPatches())
   const found: string[] = []

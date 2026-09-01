@@ -304,3 +304,77 @@ describe("Contract: Redaction enforcement", () => {
     })
   }
 })
+
+// ---------------------------------------------------------------------------
+// Auto-instrumentation introspection
+// ---------------------------------------------------------------------------
+
+/**
+ * The surface that drifted while nothing was watching it.
+ *
+ * Everything above describes the wire: what the Guard API sends and what this
+ * SDK must make of it. This block describes what auto-instrumentation says
+ * about *itself* — the part a customer asserts on in their own CI, and which
+ * matched the Python SDK only by memory until the contract grew this section.
+ *
+ * `../src/auto` is mocked at the top of this file for the redaction cases, so
+ * the real module is pulled in explicitly here.
+ */
+describe("Contract: auto-instrumentation introspection", () => {
+  const realAuto = jest.requireActual("../src/auto")
+
+  const section = contract.instrumentation_introspection
+  const findCase = (name: string) => {
+    expect(section).toBeDefined()
+    const found = section.cases.find((c: { name: string }) => c.name === name)
+    if (!found) throw new Error(`no case named '${name}' in instrumentation_introspection`)
+    return found
+  }
+
+  it("report exposes exactly the contracted keys", () => {
+    const c = findCase("report_exposes_exactly_these_keys")
+    // The contract writes keys snake_case; this SDK spells them camelCase.
+    const expected = c.expect_report_keys
+      .map((k: string) => k.replace(/_([a-z])/g, (_m: string, ch: string) => ch.toUpperCase()))
+      .sort()
+    expect(Object.keys(realAuto.instrumentationReport()).sort()).toEqual(expected)
+  })
+
+  it("advice url is the contracted one", () => {
+    const c = findCase("advice_url_is_the_same_in_both_sdks")
+    expect(realAuto.instrumentationReport().adviceUrl).toBe(c.expect_advice_url)
+  })
+
+  it("patch name vocabulary matches the contract", () => {
+    // Python reported the Bedrock patch as `boto3-bedrock` while this SDK
+    // reported `bedrock`, so the same health check answered differently per
+    // language. This is the assertion that would have caught it.
+    const c = findCase("patch_name_vocabulary_is_the_same_in_both_sdks")
+    expect(realAuto.knownPatchNames().slice().sort()).toEqual(c.expect_patch_names.slice().sort())
+  })
+
+  it("patched and detectedUnpatched are disjoint", () => {
+    const c = findCase("patched_and_detected_unpatched_are_disjoint")
+    const report = realAuto.instrumentationReport() as Record<string, string[]>
+    const [left, right] = c.expect_disjoint.map((k: string) =>
+      k.replace(/_([a-z])/g, (_m: string, ch: string) => ch.toUpperCase()),
+    )
+    const overlap = report[left].filter((v) => report[right].includes(v))
+    expect(overlap).toEqual([])
+  })
+
+  it("detectedUnpatched is sorted and free of duplicates", () => {
+    const c = findCase("detected_unpatched_is_sorted_and_free_of_duplicates")
+    const key = c.expect_sorted_unique.replace(/_([a-z])/g, (_m: string, ch: string) =>
+      ch.toUpperCase(),
+    )
+    const values = (realAuto.instrumentationReport() as Record<string, string[]>)[key]
+    expect(values).toEqual([...new Set(values)].sort())
+  })
+
+  it("nothing is patched after shutdown", () => {
+    const c = findCase("nothing_is_patched_before_init_or_after_shutdown")
+    realAuto.shutdown()
+    expect(realAuto.instrumentationReport().patched).toEqual(c.expect.patched)
+  })
+})
