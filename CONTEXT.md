@@ -99,9 +99,10 @@ _Avoid_: schema types, models
 
 **Applied patch**:
 One provider SDK that `init()` has successfully hooked.
-_Avoid_: patched SDK, instrumented SDK, hooked library. Note the two SDKs
-currently disagree here — Node exposes `getAppliedPatches()`, Python exposes
-`patched_sdks()` — and the guard contract does not cover this surface.
+_Avoid_: patched SDK, instrumented SDK, hooked library. The two SDKs still
+spell the accessor differently — `getAppliedPatches()` here, `patched_sdks()`
+in Python — but since contract v1.6.0 they are held to the same *vocabulary*,
+so both report `bedrock` for the same provider.
 
 **Detected-unpatched library**:
 A provider library that is installed and that this SDK knows how to patch, but

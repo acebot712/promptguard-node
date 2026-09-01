@@ -16,16 +16,29 @@ is the point.
 
 ## Consequences
 
-The contract covers wire-facing behaviour — decision parsing, redaction
-enforcement, message conversion per provider, the blocked-error shape, the
-request payload. It does **not** cover either SDK's auto-instrumentation
-introspection surface, and those have already drifted: this SDK exposes
-`getAppliedPatches()` and `detectedUnpatched()`, while Python exposes
-`patched_sdks()` and `is_active()`, with the detected-unpatched helper public
-here and private there. Nothing failed, because nothing checks.
+The contract's coverage is the real boundary of the mirroring guarantee.
+Anything outside it matches only as long as someone remembers, which is not a
+guarantee at all.
 
-So the contract's coverage is the real boundary of the mirroring guarantee.
-Anything outside it matches only as long as someone remembers, and the honest
-options are to extend the contract or to stop claiming parity for that surface.
+Writing that down is what surfaced the first breach. Through v1.5.1 the
+contract covered wire-facing behaviour only — decision parsing, redaction
+enforcement, message conversion per provider, the blocked-error shape, the
+request payload — and said nothing about what auto-instrumentation reports
+about itself. That surface had already drifted: Python named the Bedrock patch
+`boto3-bedrock` where this SDK named it `bedrock`, so the same health check
+answered differently per language. Nothing failed, because nothing checked.
+
+**v1.6.0 closed it.** An `instrumentation_introspection` section now pins the
+report's key set, the advice URL, the provider-patch name vocabulary and two
+invariants. This SDK was already right and needed no behaviour change; Python
+took the rename.
+
+What remains deliberately unpinned is the *accessor* naming:
+`getAppliedPatches()` here against `patched_sdks()` in Python, `is_active()`
+only there, `detectedUnpatched()` public here and private there. Those are
+public API in two published packages, so aligning them costs a major version in
+both. The contract pins the facts the two SDKs report rather than the names
+they report them under, which is the part a caller's assertion actually depends
+on.
 
 The counterpart of this ADR lives in `promptguard-python`.
