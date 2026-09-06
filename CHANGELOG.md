@@ -12,6 +12,30 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-09-06
+
+**No user-facing change.** This release keeps the Node SDK's version in step
+with `promptguard-sdk` 2.2.0 on PyPI, which the cross-SDK contract pairs it
+with. Everything below is internal, and it is recorded rather than omitted so
+the version bump is not unexplained.
+
+### Changed
+
+- The generated API types were re-synced from the spec: `tokenize` joins the
+  `pii_detection.mode` literal, `multi_turn_drift` appears on the detector
+  configuration, `ApiKeyFullResponse` is gone with the key-reveal endpoint it
+  described, and the managed-update-policy docstring names the
+  `shadow_fleet_management` entitlement.
+
+  **None of this is reachable from the package.** Nothing under `src/` imports
+  `src/generated/api-types.ts`, and the `exports` map publishes no `./generated`
+  subpath, so the file ships in the tarball without being importable. The Python
+  SDK's equivalent module *is* importable, which is why the same sync is a
+  user-facing entry there and an internal note here.
+
+- The auto-instrumentation report is covered by the cross-SDK contract, and the
+  SDK's domain model is written down.
+
 ## [2.1.0] — 2026-08-30
 
 ### Added
