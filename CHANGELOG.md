@@ -12,6 +12,20 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.2.1] — 2026-09-18
+
+### Security
+
+- **browserslist prototype-write advisory patched** (#51). A development
+  dependency of the build; no runtime code changes. Published so installs of
+  this package no longer resolve the vulnerable version.
+
+### Changed
+
+- **Generated types and the cross-SDK contract re-synced from the platform API**
+  (#50). Types only.
+
+
 ## [2.2.0] — 2026-09-06
 
 **No user-facing change.** This release keeps the Node SDK's version in step
