@@ -8,6 +8,17 @@
  */
 
 /* eslint-disable */
+/** A destination the agent may send to until ``expires_at`` (ISO 8601). */
+export interface ActiveGrant {
+  host: string
+  code: string
+  expires_at: string
+}
+
+export interface ActiveGrantList {
+  grants: Array<ActiveGrant>
+}
+
 /** Content being written to, or read back from, an agent's memory. */
 export interface AgentMemoryRequest {
   /** The memory chunk to scan */
@@ -54,6 +65,20 @@ export interface AgentRotateResponse {
   new_secret: string
   credential_prefix: string
   old_credential_revoked: boolean
+}
+
+export interface AgentSecurityHealthResponse {
+  status: string
+  validator_status: string
+  analyzer_status: string
+  blocked_tools_count: number
+}
+
+export interface AgentSessionEndedResponse {
+  status: string
+  agent_id: string
+  session_id: string
+  deprecated: boolean
 }
 
 /** Statistics for an agent */
@@ -118,6 +143,11 @@ export interface AgentTraceResponse {
   event_id: string
 }
 
+export interface ApiHealthResponse {
+  status: string
+  timestamp: string
+}
+
 export interface ApiKeyResponse {
   id: string
   name: string
@@ -130,6 +160,24 @@ export interface ApiKeyResponse {
   last_used_at: string | unknown
   expires_at?: string | unknown
   created_at: string
+}
+
+/** What the toggle answers: whether the key authenticates from now on. */
+export interface ApiKeyToggledResponse {
+  success: boolean
+  is_active: boolean
+}
+
+export interface ApiRootResponse {
+  name: string
+  description: string
+  status: string
+  documentation: string | unknown
+}
+
+/** A constant: the real version is behind ``/dashboard/version``. */
+export interface ApiVersionProbeResponse {
+  status: string
 }
 
 export interface AuthErrorEnvelope {
@@ -211,6 +259,83 @@ export interface developer__projects__schemas__CreateProjectRequest {
   fail_mode?: "open" | "closed"
   use_case?: string
   strictness_level?: "strict" | "moderate" | "permissive"
+}
+
+/** One category the Device's masker caught, and how many times. */
+export interface DeviceFinding {
+  /** The Engine's threat category, e.g. 'api_key_leak' or 'pii_leak'. */
+  category: ThreatType
+  /** How many values of this category the masker replaced. */
+  count: number
+}
+
+/** What the calling device is enrolled as. */
+export interface DeviceIdentity {
+  device_id: string
+  device_name: string
+  organization_id: string
+  organization_name: string | unknown
+  identity_verified: boolean
+  account_email: string | unknown
+  account_name: string | unknown
+  attribution_label: string | unknown
+}
+
+export interface DeviceRevokedResponse {
+  revoked?: boolean
+}
+
+/** One exception request as the filing device sees it. Timestamps are ISO 8601. */
+export interface DeviceShadowException {
+  id: string
+  code: string
+  destination_host: string
+  policy_id: string | unknown
+  threat: string | unknown
+  reason_category: string | unknown
+  justification: string | unknown
+  requested_minutes: number
+  /** pending | approved | denied | cancelled | expired */
+  status: string
+  created_at: string | unknown
+  decided_at: string | unknown
+  expires_at: string | unknown
+}
+
+export interface DeviceShadowExceptionList {
+  exceptions: Array<DeviceShadowException>
+}
+
+/** One "request a tool" row as the filing device sees it. Timestamps are ISO 8601. */
+export interface DeviceToolRequest {
+  id: string
+  code: string
+  requested_host: string
+  requested_name: string | unknown
+  justification: string | unknown
+  /** pending | approved | denied | cancelled */
+  status: string
+  created_at: string | unknown
+  decided_at: string | unknown
+}
+
+export interface DeviceToolRequestList {
+  tool_requests: Array<DeviceToolRequest>
+}
+
+/** One device as an enrolled device may see it: another machine's label is withheld. */
+export interface DeviceView {
+  id: string
+  name: string
+  platform: string
+  last_seen_at: string | unknown
+  end_user_id: string | unknown
+  /** None where the label is withheld */
+  identity_verified: boolean | unknown
+}
+
+export interface DeviceViewList {
+  devices: Array<DeviceView>
 }
 
 export interface DivergenceItemOut {
@@ -373,6 +498,8 @@ export interface GuardRequest {
   retrieved_context?: Array<ContextDoc> | unknown
   /** Media attachments to scan for steganographic payloads, adversarial patches, and font injection. Optional. */
   media?: Array<MediaPartSchema> | unknown
+  /** What the calling Device's own masker caught before sending, as `{category, count}` pairs — never the values. `category` is one of the threat types this API returns (e.g. `api_key_leak`, `pii_leak`) and appears at most once; `count` is a positive integer. Any other key is rejected with 422. Recorded on this request's event, attributed to the Device, and shown in the fleet views; it does not change the decision. Optional; clients that omit it are unaffected. */
+  device_findings?: Array<DeviceFinding> | unknown
 }
 
 /** Response from the guard endpoint. */
@@ -395,6 +522,8 @@ export interface GuardResponse {
   latency_ms: number
   /** Parts that reached us and produced nothing to scan. An `allow` with a non-empty `unscanned` is NOT 'this content is clean' — it is 'the text was clean and these parts were never read'. Reasons: url_only (we do not fetch caller-supplied URLs, that would be an SSRF primitive), file_id_unsupported, encrypted, no_text_extracted (a scanned/rasterised document), too_large, undecodable, unsupported_type, extractor_unavailable, unsupported_block, unsupported_tool_call (an entry in `context.tool_calls` in none of the shapes we can read — `index` is its position in that list). */
   unscanned?: Array<UnscannedAttachment>
+  /** Unavailable checks: detectors this scan would have run but the deployment cannot, because their backing service (an ML inference endpoint, an LLM judge, a bundled model) is not configured. An `allow` with a non-empty `unavailable` is NOT 'every check passed' — these detectors never looked. A detector that ran and found nothing is not listed, and neither is one the project's plan or guardrail settings leave out. */
+  unavailable?: Array<UnavailableCheck>
   /** What this account is entitled to, at the instant this scan was answered. Null when the engine cannot say — an account with no subscription row, an admin key that bypasses the counter, or a row it could not read. Null is 'unknown', NOT 'unentitled': a client that reads it as a limit has invented a refusal the engine never made. */
   entitlement?: GuardEntitlement | unknown
 }
@@ -506,6 +635,42 @@ export interface ProjectResponse {
   strictness_level: string
   zero_retention?: boolean
   created_at: string
+}
+
+/** An Anthropic message. */
+export interface ProxyAnthropicMessage {
+  id: string
+  type: string
+  role: string
+  model: string
+  content: Array<Record<string, unknown>>
+}
+
+/** An OpenAI chat completion. */
+export interface ProxyChatCompletion {
+  id: string
+  object: string
+  created: number
+  model: string
+  choices: Array<Record<string, unknown>>
+}
+
+/** OpenAI's model list. */
+export interface ProxyModelList {
+  data: Array<Record<string, unknown>>
+}
+
+/** An OpenAI Responses API response. */
+export interface ProxyResponsesObject {
+  id: string
+  object: string
+  model: string
+  output: Array<Record<string, unknown>>
+}
+
+/** Anthropic's token count for a messages body. */
+export interface ProxyTokenCount {
+  input_tokens: number
 }
 
 export interface QuotaErrorDetail {
@@ -642,6 +807,54 @@ export interface ThreatDetail {
   weighted_score?: number | unknown
 }
 
+/** Types of threats detected.
+
+Originals (block 1) cover prompt injection, PII, toxicity, exfiltration,
+fraud, and malicious tool/MCP invocation.
+
+Block 2 (added 2026-04) covers the AI Agent Traps framework
+(Franklin et al., Google DeepMind 2025) -- six categories of
+environment-driven attacks against autonomous agents. Cross-link
+to the per-category remediation pages under apps/docs/security/. */
+export type ThreatType =
+  | "prompt_injection"
+  | "pii_leak"
+  | "data_exfiltration"
+  | "toxicity"
+  | "api_key_leak"
+  | "system_prompt_leak"
+  | "policy_violation"
+  | "fraud_abuse"
+  | "malware"
+  | "secret_key_leak"
+  | "url_violation"
+  | "malicious_entity"
+  | "off_topic"
+  | "mcp_violation"
+  | "insecure_code"
+  | "gibberish"
+  | "language_violation"
+  | "multi_turn_escalation"
+  | "html_obfuscation"
+  | "syntactic_masking"
+  | "image_stego"
+  | "image_adversarial"
+  | "audio_stego"
+  | "font_injection"
+  | "dynamic_cloaking"
+  | "framing_bias"
+  | "critic_evasion"
+  | "persona_hyperstition"
+  | "rag_poisoning"
+  | "memory_poisoning"
+  | "few_shot_poisoning"
+  | "sub_agent_spawning"
+  | "compositional_fragment"
+  | "sybil_attack"
+  | "systemic_cascade"
+  | "tacit_collusion"
+  | "approval_fatigue"
+
 export interface ToggleOnlyConfig {
   enabled?: boolean
 }
@@ -650,6 +863,14 @@ export interface ToxicityConfig {
   enabled?: boolean
   threshold?: number
   categories?: Array<string> | unknown
+}
+
+/** One detector the deployment cannot run, and why. */
+export interface UnavailableCheck {
+  /** Stable detector name, e.g. 'jailbreak_judge'. */
+  detector: string
+  /** Why it cannot run: ml_inference_off (ML_INFERENCE_MODE=off), ml_inference_not_configured (no inference endpoint or token), ml_inference_mode_unsupported (a mode this detector does not implement), llm_judge_not_configured (no LLM judge endpoint), model_not_bundled (an in-process model artifact is missing). */
+  reason: string
 }
 
 /** One part of the request we could not read, and why. */
@@ -662,10 +883,27 @@ export interface UnscannedAttachment {
   detail: string
 }
 
+/** The caller's request usage this month. ``reset_date`` is ISO 8601. */
+export interface UsageStatsResponse {
+  has_subscription: boolean
+  plan: string
+  status?: string | unknown
+  monthly_limit: number
+  used_this_month: number
+  remaining: number
+  usage_percentage: number
+  reset_date?: string | unknown
+}
+
 export interface ValidationError {
   loc: Array<string | number>
   msg: string
   type: string
   input?: unknown
   ctx?: Record<string, unknown>
+}
+
+/** What GitHub is told: a ping is answered, every other event accepted for later. */
+export interface WebhookAckResponse {
+  status: "pong" | "accepted"
 }
