@@ -39,6 +39,11 @@ jobs:
       validate-command: |
         npx tsc --noEmit
         npm test
+      # Exactly what ci.yml's "Biome check (lint + format)" step runs. Without
+      # it the sync opened a PR that failed that step, and because Biome runs
+      # before `tsc --noEmit` in that job, the generated types were never
+      # type-checked either.
+      format-command: npx biome check --write .
       generated-types-path: src/generated/
       generated-types-file-label: src/generated/api-types.ts
       sibling-sdk-name: the Python SDK
