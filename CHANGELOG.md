@@ -12,6 +12,11 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Security
+
+- **brace-expansion advisories patched** (2.1.7 and 5.0.12). A development
+  dependency of the test and build tooling; no runtime code changes.
+
 ## [2.2.1] — 2026-09-18
 
 ### Security
