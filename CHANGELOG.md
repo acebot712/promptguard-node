@@ -12,10 +12,49 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-10-10
+
+**No runtime change.** Generated types and development tooling only. The
+version is a minor one to stay level with the Python SDK, whose 2.3.0 ships the
+same type sync in a module that can be imported.
+
+### Changed
+
+- **Generated API types re-synced from the platform's OpenAPI spec** (#52).
+  Additive: nothing was removed or renamed.
+  - `GuardRequest.device_findings` (`DeviceFinding[]`, optional): what a
+    Device's own masker caught before sending, as category and count pairs.
+  - `GuardResponse.unavailable` (`UnavailableCheck[]`, optional): detectors the
+    scan would have run but the deployment cannot, each with a reason. An
+    `allow` with a non-empty `unavailable` does not mean every check passed.
+  - `ThreatType`, the union of threat categories the API returns.
+  - Device and Shadow response shapes: `DeviceIdentity`, `DeviceView`,
+    `DeviceViewList`, `DeviceRevokedResponse`, `DeviceShadowException`,
+    `DeviceShadowExceptionList`, `DeviceToolRequest`, `DeviceToolRequestList`,
+    `ActiveGrant` and `ActiveGrantList`.
+  - Proxy response shapes: `ProxyChatCompletion`, `ProxyAnthropicMessage`,
+    `ProxyResponsesObject`, `ProxyModelList` and `ProxyTokenCount`.
+  - Other response shapes: `UsageStatsResponse`, `ApiKeyToggledResponse`,
+    `AgentSecurityHealthResponse`, `AgentSessionEndedResponse`,
+    `ApiHealthResponse`, `ApiRootResponse`, `ApiVersionProbeResponse` and
+    `WebhookAckResponse`.
+
+  As in 2.2.0, none of this is importable from the package: nothing under
+  `src/` imports `src/generated/api-types.ts` and the `exports` map publishes
+  no `./generated` subpath. The hand-written `GuardRequestBody` and
+  `GuardResponseBody` types the SDK exports are unchanged, so the SDK does not
+  send `device_findings` or type `unavailable` yet.
+
+- Development tooling only: development dependencies bumped (#55),
+  `biome.json` migrated off the deprecated `recommended` field (#54), and the
+  type sync now formats its output so its pull request passes lint (#53).
+
 ### Security
 
 - **brace-expansion advisories patched** (2.1.7 and 5.0.12). A development
   dependency of the test and build tooling; no runtime code changes.
+- **handlebars moved to 4.7.10** for three advisories. Reached only through
+  the test coverage reporter; nothing published was affected.
 
 ## [2.2.1] — 2026-09-18
 
