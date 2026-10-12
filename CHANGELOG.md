@@ -12,6 +12,14 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Security
+
+- `sprintf-js` is gone from the dev toolchain (GHSA-hp3w-g68c-fv3c, medium, no
+  patched release). It arrived only through `js-yaml` 3, which the coverage
+  tooling asks for and which an override here had held on the 3.x line. The
+  override now selects `js-yaml` 4, whose `argparse` does not use it. Dev-scope
+  only: no published version of this package ever installed it.
+
 ## [2.3.0] — 2026-10-10
 
 **No runtime change.** Generated types and development tooling only. The
