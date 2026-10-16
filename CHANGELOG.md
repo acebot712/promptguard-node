@@ -12,6 +12,26 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Vercel AI SDK middleware now scans streamed output.** With
+  `scanResponses: true`, `streamText()` output used to reach the application
+  unscanned (`wrapStream` only logged the skip), so a streamed secret or PII
+  was never blocked. It is now scanned with the same text, decisions and
+  fail-open policy as `generateText()` output (acebot712/promptguard#961). In
+  enforce mode the stream is held back one window at a time — each window of
+  `streamWindowChars` characters (new option, default `1000`; `Infinity`
+  holds the whole response) is scanned before it is released, and the
+  complete text is scanned again before the stream finishes. A block stops
+  the stream with `PromptGuardBlockedError`. Monitor mode never holds the
+  stream and scans the complete text at the end. A Guard API outage
+  mid-stream releases the held parts and leaves the rest of that stream
+  unscanned (`failOpen: true`, the default), or stops it with the
+  `GuardApiError` (`failOpen: false`). **Behaviour change for existing
+  `scanResponses: true` users:** streamed output now arrives a window at a
+  time, each after one Guard API round trip, and a stream can now end in an
+  error.
+
 ### Security
 
 - `sprintf-js` is gone from the dev toolchain (GHSA-hp3w-g68c-fv3c, medium, no

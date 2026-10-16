@@ -73,6 +73,13 @@ fallback that happens to exist.
 _Avoid_: fail-safe (ambiguous about which way it fails), degraded mode,
 bypass
 
+**Stream window**:
+The stretch of streamed output — `streamWindowChars` characters, default
+1000 — that the Vercel AI SDK middleware holds back in enforce mode until it
+has been scanned. The complete text is still scanned once more at the end; the
+window bounds how much is held, not what is scanned.
+_Avoid_: chunk (that is one stream part from the model), buffer, batch
+
 **Redaction**:
 A decision that rewrites the outgoing messages instead of stopping the call.
 When the call cannot be rewritten safely, enforce mode escalates it to a block.

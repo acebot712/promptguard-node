@@ -17,6 +17,11 @@
  *
  * const { text } = await generateText({ model, prompt: 'Hello!' });
  * ```
+ *
+ * With `scanResponses: true`, `streamText()` output is scanned too: in
+ * enforce mode at most one window (`streamWindowChars`, default 1000
+ * characters) is held back at a time, and the complete text is scanned before
+ * the stream finishes. See `vercel-ai-output.ts` for the full behaviour.
  */
 
 import {
@@ -29,6 +34,14 @@ import {
 } from "../guard"
 import { type LogLevel, logger, setLogLevel } from "../logger"
 import { resolveCredentials } from "../resolve"
+import {
+  DEFAULT_STREAM_WINDOW_CHARS,
+  extractGeneratedText,
+  type OutputScanPolicy,
+  scanOutputStream,
+  scanOutputText,
+  validateWindowChars,
+} from "./vercel-ai-output"
 
 // ---------------------------------------------------------------------------
 // Options
@@ -36,8 +49,19 @@ import { resolveCredentials } from "../resolve"
 
 export interface PromptGuardMiddlewareOptions extends GuardClientConfig {
   mode?: "enforce" | "monitor"
+  /**
+   * Scan the model's output as well as its input (default: `false`). Applies
+   * to `generateText()` and to `streamText()` alike.
+   */
   scanResponses?: boolean
   failOpen?: boolean
+  /**
+   * With `scanResponses` in enforce mode, how many characters of streamed
+   * output are held back and scanned at a time (default: `1000`). A smaller
+   * window delivers the first tokens sooner at the cost of more scans;
+   * `Infinity` holds the whole response for a single scan at the end.
+   */
+  streamWindowChars?: number
   /**
    * SDK log verbosity (default: `"warn"`). Set to `"silent"` to suppress logs.
    * NOTE: this sets the **process-global** SDK log level (shared with `init()`
@@ -57,7 +81,8 @@ export interface PromptGuardMiddlewareOptions extends GuardClientConfig {
  * the PromptGuard Guard API.
  *
  * Returns an object conforming to the Vercel AI SDK `LanguageModelMiddleware`
- * interface (`transformParams` + `wrapGenerate`).
+ * interface (`transformParams`, plus `wrapGenerate` and `wrapStream` when
+ * `scanResponses` is set).
  */
 export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
   if (options.silent) setLogLevel("silent")
@@ -75,6 +100,12 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
   const mode = options.mode ?? "enforce"
   const scanResponses = options.scanResponses ?? false
   const failOpen = options.failOpen ?? true
+  const outputPolicy: OutputScanPolicy = {
+    guard,
+    mode,
+    failOpen,
+    windowChars: validateWindowChars(options.streamWindowChars ?? DEFAULT_STREAM_WINDOW_CHARS),
+  }
 
   return {
     /**
@@ -167,51 +198,37 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
           const text = extractGeneratedText(result as Record<string, unknown>)
           if (!text) return result
 
-          try {
-            const respDecision = await guard.scan(
-              [{ role: "assistant", content: text }],
-              "output",
-              (params?.modelId as string) ?? undefined,
-              { framework: "vercel-ai-sdk" },
-            )
-
-            if (respDecision.blocked || respDecision.redacted) {
-              // Generated output cannot be rewritten after the fact, so an
-              // output-direction redact decision is enforced as a block.
-              if (mode === "enforce") {
-                throw new PromptGuardBlockedError(respDecision)
-              }
-              logger.warn(
-                `[monitor] would ${respDecision.redacted ? "redact" : "block"} response: ${respDecision.threatType}`,
-              )
-            }
-          } catch (err) {
-            if (err instanceof PromptGuardBlockedError) throw err
-            // Only a Guard API outage is eligible for fail-open; rethrow
-            // the original error when failing closed.
-            if (!(err instanceof GuardApiError)) throw err
-            if (!failOpen) throw err
-            logger.warn(
-              `Guard API unavailable, response left unscanned (failOpen=true): ${safeErrorLabel(
-                err,
-              )}`,
-            )
-          }
-
+          await scanOutputText(text, outputPolicy, modelIdOf(params))
           return result
         }
       : undefined,
 
     /**
-     * wrapStream - streamed outputs are NOT scanned (chunks are consumed
-     * incrementally by the caller and cannot be buffered without breaking
-     * stream semantics). Present only to log the skip so the gap is never
-     * silent; input scanning via transformParams still applies.
+     * wrapStream - optionally scans the model's streamed response, in
+     * windows and then in full, with the same decisions and the same
+     * fail-open policy as wrapGenerate (see `vercel-ai-output.ts`).
      */
     wrapStream: scanResponses
-      ? async ({ doStream }: { doStream: () => Promise<unknown> }) => {
-          logger.debug("output scanning skipped for streaming response (framework=vercel-ai-sdk)")
-          return doStream()
+      ? async ({
+          doStream,
+          params,
+        }: {
+          doStream: () => Promise<unknown>
+          params?: Record<string, unknown>
+        }) => {
+          const result = await doStream()
+          const stream = (result as { stream?: unknown } | null)?.stream
+          // Duck-typed: a stream from another realm or polyfill is still a stream.
+          if (typeof (stream as ReadableStream | undefined)?.pipeThrough !== "function") {
+            logger.warn(
+              "streamed response has no readable stream to scan; left unscanned (framework=vercel-ai-sdk)",
+            )
+            return result
+          }
+          return {
+            ...(result as Record<string, unknown>),
+            stream: scanOutputStream(stream as ReadableStream, outputPolicy, modelIdOf(params)),
+          }
         }
       : undefined,
   }
@@ -221,50 +238,8 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Extract all scannable text from a `doGenerate` result.
- *
- * Handles both AI SDK result shapes:
- *  - **v4 (LanguageModelV1):** top-level `text` string plus `toolCalls`
- *    (every tool call's `args`/`input` is scanned — not just the first).
- *  - **v5 (LanguageModelV2):** `content` is an array of parts
- *    (`{ type: "text", text }` / `{ type: "tool-call", input }`) with no
- *    top-level `text`.
- *
- * Returns the concatenated text, or `null` when nothing scannable exists.
- */
-function extractGeneratedText(result: Record<string, unknown> | null | undefined): string | null {
-  const texts: string[] = []
-
-  const stringify = (value: unknown): string =>
-    typeof value === "string" ? value : JSON.stringify(value)
-
-  if (typeof result?.text === "string" && result.text) texts.push(result.text)
-
-  if (Array.isArray(result?.content)) {
-    for (const raw of result.content) {
-      if (!raw || typeof raw !== "object") continue
-      const part = raw as Record<string, unknown>
-      if (part.type === "text" && typeof part.text === "string" && part.text) {
-        texts.push(part.text)
-      } else if (part.type === "tool-call") {
-        const args = part.input ?? part.args
-        if (args != null) texts.push(stringify(args))
-      }
-    }
-  }
-
-  if (Array.isArray(result?.toolCalls)) {
-    for (const raw of result.toolCalls) {
-      if (!raw || typeof raw !== "object") continue
-      const call = raw as Record<string, unknown>
-      const args = call.args ?? call.input
-      if (args != null) texts.push(stringify(args))
-    }
-  }
-
-  const combined = texts.join("\n")
-  return combined || null
+function modelIdOf(params: Record<string, unknown> | undefined): string | undefined {
+  return typeof params?.modelId === "string" ? params.modelId : undefined
 }
 
 /**

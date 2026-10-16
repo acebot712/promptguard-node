@@ -218,6 +218,15 @@ describe("promptGuardMiddleware wrapStream", () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  test("a doStream result without a stream is returned unchanged, with a warning", async () => {
+    global.fetch = jest.fn()
+    const odd = { notAStream: true }
+    // biome-ignore lint/style/noNonNullAssertion: defined when scanResponses=true
+    const result = await middleware().wrapStream!({ doStream: async () => odd })
+    expect(result).toBe(odd)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("left unscanned"))
+  })
+
   describe("windowed scanning", () => {
     test("releases a scanned window before the model has finished", async () => {
       global.fetch = guardFetchSequence(ALLOW, ALLOW)

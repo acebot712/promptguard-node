@@ -260,6 +260,13 @@ const { text } = await generateText({
 });
 ```
 
+With `scanResponses: true`, streamed output (`streamText()`) is scanned as well as generated output, with the same decisions and the same fail-open policy:
+
+- **Enforce mode holds back one window at a time.** Stream parts are released only once the text they carry has been scanned. Every `streamWindowChars` characters (default `1000`) the window is scanned, with the end of the previous window as context, and released if clean. When the model finishes, the complete text is scanned once more before the last window and the `finish` part are released. Nothing reaches your code unscanned; the cost is that output arrives a window at a time, each after one Guard API round trip. Set `streamWindowChars: Infinity` to hold the whole response for a single scan at the end.
+- **A block stops the stream** with `PromptGuardBlockedError` (an output `redact` is enforced as a block, as with `generateText()`). Parts already released stay delivered; nothing after the blocked window is. The AI SDK surfaces it the way it surfaces any model stream error — `streamText()`'s `onError` and an `error` part on `fullStream`.
+- **Monitor mode never holds the stream.** Parts pass through as they arrive and the complete text is scanned once at the end.
+- **If the Guard API becomes unreachable mid-stream**, the held parts are released and the rest of that stream passes unscanned with a warning (`failOpen: true`, the default). With `failOpen: false` the stream stops with the `GuardApiError` instead.
+
 ### Standalone Guard API
 
 Use the Guard client directly for maximum control:
@@ -400,7 +407,7 @@ What to do:
 
 ### Other limitations
 
-- **Streaming responses are not output-scanned.** With auto-instrumentation and `scanResponses: true`, streaming calls (`stream: true`, Bedrock `ConverseStreamCommand`, etc.) skip the output scan — the stream is consumed incrementally by your code and cannot be buffered without breaking stream semantics. Input scanning still applies. A `debug`-level log is emitted when the output scan is skipped. The same applies to the Vercel AI SDK middleware: `streamText()` outputs are not scanned (`wrapStream` logs the skip); `generateText()` outputs are.
+- **Auto-instrumented streaming responses are not output-scanned.** With auto-instrumentation and `scanResponses: true`, streaming calls (`stream: true`, Bedrock `ConverseStreamCommand`, etc.) skip the output scan — the patched SDK hands the stream straight to your code. Input scanning still applies. A `debug`-level log is emitted when the output scan is skipped. The Vercel AI SDK middleware is the exception: it scans `streamText()` output in windows (see [Vercel AI SDK](#vercel-ai-sdk)).
 - **OpenAI `APIPromise` helpers are not preserved by auto-instrumentation.** Patched methods return a plain `Promise`, so `.withResponse()` / `.asResponse()` on `client.chat.completions.create(...)` are unavailable while `init()` is active. `await` the call and use the plain result instead.
 - **Proxy client streaming:** `pg.chat.completions.create({ stream: true })` is rejected with a clear error — streaming is not yet supported by the proxy client.
 
