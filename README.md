@@ -260,6 +260,16 @@ const { text } = await generateText({
 });
 ```
 
+With `scanResponses: true`, streamed output (`streamText()`) is scanned as well as generated output, with the same decisions and the same fail-open policy:
+
+- **Enforce mode holds back text until it has been scanned.** Parts that carry scanned text (text deltas, tool-call input) are held. Each time `streamWindowChars` new characters (default `1000`) have arrived, everything held is scanned and, if clean, released — except the last 200 characters, which stay held and are scanned again at the head of the next window. When the model finishes, the complete text is scanned once more before that tail and the `finish` part are released. The guarantee: no text reaches your code before it has been scanned together with at least the 200 characters that follow it, so a secret up to 200 characters long is always seen whole, even across a window boundary. The cost is that text arrives in bursts, each after one Guard API round trip. Set `streamWindowChars: Infinity` to hold the whole response for a single scan at the end.
+- **Parts with nothing to scan are not held for nothing.** Stream start, reasoning, sources, files and metadata are delivered at once when no text is held ahead of them, and queue behind held text otherwise, so the order of parts never changes. Reasoning is not scanned, as it is not with `generateText()`.
+- **The default window is a judgement call**, not an external standard: 1000 characters is about 250 tokens, a few seconds of generation, which is about as long as one Guard API round trip — so scanning a window roughly keeps pace with generating the next. A smaller window gets the first text out sooner and costs more scans.
+- **A block stops the stream** with `PromptGuardBlockedError` (an output `redact` is enforced as a block, as with `generateText()`). Parts already released stay delivered; nothing after the blocked window is. The AI SDK surfaces it the way it surfaces any model stream error — `streamText()`'s `onError` and an `error` part on `fullStream`.
+- **Monitor mode never holds the stream.** Parts pass through as they arrive and the complete text is scanned once at the end.
+- **The final scan sees what `generateText()` would.** The complete text is assembled the same way as a generated result — text first, then each tool call's input — so the same response gets the same decision streamed or not.
+- **If the Guard API becomes unreachable mid-stream**, the held parts are released and the rest of that stream passes unscanned with a warning (`failOpen: true`, the default). With `failOpen: false` the stream stops with the `GuardApiError` instead.
+
 ### Standalone Guard API
 
 Use the Guard client directly for maximum control:
@@ -400,7 +410,7 @@ What to do:
 
 ### Other limitations
 
-- **Streaming responses are not output-scanned.** With auto-instrumentation and `scanResponses: true`, streaming calls (`stream: true`, Bedrock `ConverseStreamCommand`, etc.) skip the output scan — the stream is consumed incrementally by your code and cannot be buffered without breaking stream semantics. Input scanning still applies. A `debug`-level log is emitted when the output scan is skipped. The same applies to the Vercel AI SDK middleware: `streamText()` outputs are not scanned (`wrapStream` logs the skip); `generateText()` outputs are.
+- **Auto-instrumented streaming responses are not output-scanned.** With auto-instrumentation and `scanResponses: true`, streaming calls (`stream: true`, Bedrock `ConverseStreamCommand`, etc.) skip the output scan — the patched SDK hands the stream straight to your code. Input scanning still applies. A `debug`-level log is emitted when the output scan is skipped. The Vercel AI SDK middleware is the exception: it scans `streamText()` output in windows (see [Vercel AI SDK](#vercel-ai-sdk)).
 - **OpenAI `APIPromise` helpers are not preserved by auto-instrumentation.** Patched methods return a plain `Promise`, so `.withResponse()` / `.asResponse()` on `client.chat.completions.create(...)` are unavailable while `init()` is active. `await` the call and use the plain result instead.
 - **Proxy client streaming:** `pg.chat.completions.create({ stream: true })` is rejected with a clear error — streaming is not yet supported by the proxy client.
 
