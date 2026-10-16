@@ -245,6 +245,94 @@ try {
   check("promptguard() runs under ai@7 (ESM-only), generated and streamed, blocked both ways", () => {
     run("node", ["ai-v7-check.mjs"], { cwd: appDir })
   })
+
+  // ai@5 drives LanguageModelV2 and cannot be a devDependency here: its
+  // latest release carries open advisories (npm audit). So it is installed
+  // from the registry into its own temp project, pinned, beside the packed
+  // tarball. Before the V2 error-part ending, a blocked streamed output left
+  // ai@5's `await result.text` unsettled forever; every way of reading a
+  // blocked stream must now settle, through the wrapper and through the
+  // middleware under ai@5's own wrapLanguageModel.
+  const ai5Dir = path.join(workDir, "ai5")
+  fs.mkdirSync(ai5Dir)
+  fs.writeFileSync(path.join(ai5Dir, "package.json"), JSON.stringify({ private: true }))
+  const ai5Check = `
+    import { streamText, wrapLanguageModel } from "ai"
+    import { MockLanguageModelV2 } from "ai/test"
+    import { PromptGuardBlockedError } from "promptguard-sdk"
+    import { promptguard, promptGuardMiddleware } from "promptguard-sdk/integrations/vercel-ai"
+
+    let answers = []
+    globalThis.fetch = async () => {
+      const decision = answers.shift() ?? "allow"
+      return { ok: true, status: 200, json: async () => ({ decision, event_id: "e", confidence: 0.9, threats: [] }) }
+    }
+    const opts = { apiKey: "pg_test", scanResponses: true, maxRetries: 0 }
+    const mock = () =>
+      new MockLanguageModelV2({
+        doStream: async () => ({
+          stream: new ReadableStream({
+            start(c) {
+              c.enqueue({ type: "stream-start", warnings: [] })
+              c.enqueue({ type: "text-start", id: "t" })
+              c.enqueue({ type: "text-delta", id: "t", delta: "SSN 123-45-6789" })
+              c.enqueue({ type: "text-end", id: "t" })
+              c.enqueue({ type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } })
+              c.close()
+            },
+          }),
+        }),
+      })
+    const models = {
+      wrapper: () => promptguard(mock(), opts),
+      middleware: () => wrapLanguageModel({ model: mock(), middleware: promptGuardMiddleware(opts) }),
+    }
+    const named = (e) => (e instanceof PromptGuardBlockedError ? "PromptGuardBlockedError" : e?.constructor?.name ?? String(e))
+    const within = (promise, what) =>
+      Promise.race([
+        promise.then((v) => ({ value: v }), (e) => ({ error: named(e) })),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(what + " never settled")), 3000)),
+      ])
+
+    /** Each way of reading one blocked-output stream, from a fresh call. */
+    async function read(model, how) {
+      answers = ["allow", "block"]
+      const errors = []
+      const result = streamText({ model, prompt: "Hi", onError: ({ error }) => errors.push(named(error)) })
+      let text = ""
+      const errorParts = []
+      const outcome = await within(
+        (async () => {
+          if (how === "textStream") for await (const t of result.textStream) text += t
+          if (how === "fullStream")
+            for await (const p of result.fullStream) if (p.type === "error") errorParts.push(named(p.error))
+          if (how === "text") return await result.text
+          if (how === "response") return await result.toTextStreamResponse().text()
+        })(),
+        how,
+      )
+      await new Promise((r) => setTimeout(r, 20))
+      if (text.includes("123-45-6789")) throw new Error(how + " delivered the secret")
+      return { outcome, errors, errorParts }
+    }
+
+    const report = {}
+    for (const [name, model] of Object.entries(models))
+      for (const how of ["textStream", "fullStream", "text", "response"])
+        report[name + " " + how] = await read(model(), how)
+    console.log(JSON.stringify(report))
+    for (const [k, r] of Object.entries(report))
+      if (r.errors.join() !== "PromptGuardBlockedError") throw new Error(k + ": onError got " + r.errors.join())
+  `
+  fs.writeFileSync(path.join(ai5Dir, "ai-v5-check.mjs"), ai5Check)
+  check("a blocked stream never hangs under ai@5 (V2), through the wrapper and the middleware", () => {
+    run(
+      "npm",
+      ["install", "--no-audit", "--no-fund", "--no-save", "--ignore-scripts", tarball, "ai@5.0.277", "zod@3.25.76"],
+      { cwd: ai5Dir },
+    )
+    console.log(run("node", ["ai-v5-check.mjs"], { cwd: ai5Dir }).trim())
+  })
 } finally {
   fs.rmSync(workDir, { recursive: true, force: true })
 }

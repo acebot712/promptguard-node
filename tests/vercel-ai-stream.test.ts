@@ -371,4 +371,72 @@ describe("promptGuardMiddleware wrapStream", () => {
       expect(out.parts).toEqual([parts[0]])
     })
   })
+
+  describe("how a stopped stream ends, by the model's specification version", () => {
+    /** Run `parts` through wrapStream as the AI SDK does, with the model it passes. */
+    async function wrapFor(
+      mw: ReturnType<typeof middleware>,
+      specificationVersion: string,
+      parts: Part[],
+    ): Promise<ReadableStream<Part>> {
+      // biome-ignore lint/style/noNonNullAssertion: defined when scanResponses=true
+      const result = (await mw.wrapStream!({
+        doStream: async () => ({ stream: streamOf(parts) }),
+        params: {},
+        model: { specificationVersion, modelId: "gpt-5-nano" },
+      })) as { stream: ReadableStream<Part> }
+      return result.stream
+    }
+
+    // ai@5 drives V2 models, and its `result.text` never settles when the
+    // model's stream errors; an `error` part is how a V2 model reports one.
+    test("v2: a block is an error part, then the stream closes", async () => {
+      global.fetch = guardFetchSequence(BLOCK)
+      const out = await drain(await wrapFor(middleware(), "v2", V2_LEAK))
+
+      expect(out.error).toBeUndefined()
+      expect(deliveredText(out.parts)).not.toContain("123-45-6789")
+      expect(out.parts.find((p) => p.type === "finish")).toBeUndefined()
+      const last = out.parts[out.parts.length - 1]
+      expect(last.type).toBe("error")
+      expect(last.error).toBeInstanceOf(PromptGuardBlockedError)
+      expect(out.parts.filter((p) => p.type === "error")).toHaveLength(1)
+    })
+
+    test("v2: a block found mid-stream is an error part, and nothing after it is read", async () => {
+      global.fetch = guardFetchSequence(ALLOW, BLOCK)
+      const parts: Part[] = [
+        ...["a", "b", "c", "d"].map(
+          (ch): Part => ({ type: "text-delta", id: "t", delta: ch.repeat(100) }),
+        ),
+        { type: "text-delta", id: "t", delta: "SSN 123-45-6789 ".padEnd(100, "u") },
+        { type: "text-delta", id: "t", delta: "v".repeat(100) },
+        { type: "finish", finishReason: "stop", usage: {} },
+      ]
+      const out = await drain(await wrapFor(middleware({ streamWindowChars: 300 }), "v2", parts))
+
+      expect(out.error).toBeUndefined()
+      expect(out.parts.slice(0, -1)).toEqual([parts[0]])
+      expect(out.parts[out.parts.length - 1]).toEqual({
+        type: "error",
+        error: expect.any(PromptGuardBlockedError),
+      })
+    })
+
+    test("v2: failing closed is an error part carrying the GuardApiError", async () => {
+      global.fetch = jest.fn().mockRejectedValue(new TypeError("fetch failed"))
+      const out = await drain(
+        await wrapFor(middleware({ maxRetries: 0, failOpen: false }), "v2", V2_LEAK),
+      )
+      expect(out.error).toBeUndefined()
+      expect(out.parts[out.parts.length - 1].error).toBeInstanceOf(GuardApiError)
+    })
+
+    test.each(["v3", "v4"])("%s: a block still errors the stream", async (spec) => {
+      global.fetch = guardFetchSequence(BLOCK)
+      const out = await drain(await wrapFor(middleware(), spec, V2_LEAK))
+      expect(out.error).toBeInstanceOf(PromptGuardBlockedError)
+      expect(out.parts.find((p) => p.type === "error")).toBeUndefined()
+    })
+  })
 })
