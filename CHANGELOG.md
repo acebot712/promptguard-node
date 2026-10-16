@@ -14,6 +14,11 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Added
 
+- **`instrumentationReport().middleware`**, cross-SDK contract v1.7.0: the
+  request-edge middleware alive in the process. Always `[]` here, since this SDK
+  has none; the Python SDK's new ASGI/FastAPI middleware reports `fastapi`
+  (acebot712/promptguard#945). The key exists in both so one health check
+  reads the same in either language.
 - **`streamWindowChars` option for the Vercel AI SDK middleware.** How many
   new characters of streamed output enforce mode collects before scanning
   (default `1000`, chosen to balance how long text is held against Guard API

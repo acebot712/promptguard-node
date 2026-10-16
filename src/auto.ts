@@ -286,11 +286,17 @@ export function detectedUnpatched(): string[] {
 export function instrumentationReport(): {
   patched: string[]
   detectedUnpatched: string[]
+  middleware: string[]
   adviceUrl: string
 } {
   return {
     patched: getAppliedPatches(),
     detectedUnpatched: detectedUnpatched(),
+    // Request-edge middleware alive in the process (cross-SDK contract v1.7.0).
+    // The Python SDK's ASGI/FastAPI middleware reports `fastapi`; this SDK has
+    // no such middleware yet, so the list is always empty rather than absent,
+    // and a cross-language health check reads the same key in both.
+    middleware: [],
     adviceUrl: ADVICE_URL,
   }
 }

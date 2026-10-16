@@ -28,6 +28,7 @@ jest.mock("../src/auto", () => ({
   instrumentationReport: jest.fn(() => ({
     patched: ["openai"],
     detectedUnpatched: [],
+    middleware: [],
     adviceUrl: "https://x.test",
   })),
 }))
@@ -74,6 +75,7 @@ afterEach(() => {
   mockedReport.mockReturnValue({
     patched: ["openai"],
     detectedUnpatched: [],
+    middleware: [],
     adviceUrl: "https://x.test",
   })
 })
@@ -202,6 +204,7 @@ describe("the instrumentation check", () => {
     mockedReport.mockReturnValue({
       patched: ["openai"],
       detectedUnpatched: ["@google/genai"],
+      middleware: [],
       adviceUrl: "https://x.test",
     })
     global.fetch = routeFetch({}) as unknown as typeof fetch
@@ -220,6 +223,7 @@ describe("the instrumentation check", () => {
     mockedReport.mockReturnValue({
       patched: [],
       detectedUnpatched: [],
+      middleware: [],
       adviceUrl: "https://x.test",
     })
     global.fetch = routeFetch({}) as unknown as typeof fetch
