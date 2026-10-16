@@ -74,10 +74,11 @@ _Avoid_: fail-safe (ambiguous about which way it fails), degraded mode,
 bypass
 
 **Stream window**:
-The stretch of streamed output — `streamWindowChars` characters, default
-1000 — that the Vercel AI SDK middleware holds back in enforce mode until it
-has been scanned. The complete text is still scanned once more at the end; the
-window bounds how much is held, not what is scanned.
+The `streamWindowChars` new characters of streamed output — default 1000 —
+that the Vercel AI SDK middleware collects in enforce mode before scanning
+everything it holds. The last 200 scanned characters (the **overlap**) stay
+held into the next window. The complete text is still scanned once more at
+the end; the window bounds how much is held, not what is scanned.
 _Avoid_: chunk (that is one stream part from the model), buffer, batch
 
 **Redaction**:

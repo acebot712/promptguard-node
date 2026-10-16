@@ -19,9 +19,10 @@
  * ```
  *
  * With `scanResponses: true`, `streamText()` output is scanned too: in
- * enforce mode at most one window (`streamWindowChars`, default 1000
- * characters) is held back at a time, and the complete text is scanned before
- * the stream finishes. See `vercel-ai-output.ts` for the full behaviour.
+ * enforce mode text is held until it has been scanned, a window
+ * (`streamWindowChars`, default 1000 characters) at a time, and the complete
+ * text is scanned before the stream finishes. See `vercel-ai-output.ts` for
+ * the full behaviour and its guarantee.
  */
 
 import {
@@ -56,10 +57,11 @@ export interface PromptGuardMiddlewareOptions extends GuardClientConfig {
   scanResponses?: boolean
   failOpen?: boolean
   /**
-   * With `scanResponses` in enforce mode, how many characters of streamed
-   * output are held back and scanned at a time (default: `1000`). A smaller
-   * window delivers the first tokens sooner at the cost of more scans;
-   * `Infinity` holds the whole response for a single scan at the end.
+   * With `scanResponses` in enforce mode, how many new characters of
+   * streamed output are collected before the held text is scanned (default:
+   * `1000`; see `DEFAULT_STREAM_WINDOW_CHARS` for why). A smaller window
+   * delivers the first text sooner at the cost of more scans; `Infinity`
+   * holds the whole response for a single scan at the end.
    */
   streamWindowChars?: number
   /**

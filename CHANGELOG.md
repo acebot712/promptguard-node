@@ -12,25 +12,38 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Added
+
+- **`streamWindowChars` option for the Vercel AI SDK middleware.** How many
+  new characters of streamed output enforce mode collects before scanning
+  (default `1000`, chosen to balance how long text is held against Guard API
+  round trips; `Infinity` holds the whole response for one scan). Invalid
+  values throw a `RangeError` when the middleware is created.
+
+### Changed
+
+- **Streamed output from the Vercel AI SDK middleware is now delivered after
+  it is scanned.** With `scanResponses: true` in enforce mode, text arrives in
+  bursts, each after one Guard API round trip, instead of token by token: each
+  window is scanned before it is released, and the last 200 characters of
+  every window are held and rescanned with the next, so a secret up to 200
+  characters long is always seen whole across a window boundary. The complete
+  text is scanned again before the stream finishes. Parts that carry no
+  scanned text (reasoning, sources, metadata) are not held unless text is
+  queued ahead of them. A stream can now end in an error:
+  `PromptGuardBlockedError` on a block, or the `GuardApiError` when the Guard
+  API is unreachable and `failOpen` is `false`. Monitor mode never holds the
+  stream and scans the complete text at the end.
+
 ### Fixed
 
 - **The Vercel AI SDK middleware now scans streamed output.** With
   `scanResponses: true`, `streamText()` output used to reach the application
   unscanned (`wrapStream` only logged the skip), so a streamed secret or PII
   was never blocked. It is now scanned with the same text, decisions and
-  fail-open policy as `generateText()` output (acebot712/promptguard#961). In
-  enforce mode the stream is held back one window at a time — each window of
-  `streamWindowChars` characters (new option, default `1000`; `Infinity`
-  holds the whole response) is scanned before it is released, and the
-  complete text is scanned again before the stream finishes. A block stops
-  the stream with `PromptGuardBlockedError`. Monitor mode never holds the
-  stream and scans the complete text at the end. A Guard API outage
-  mid-stream releases the held parts and leaves the rest of that stream
-  unscanned (`failOpen: true`, the default), or stops it with the
-  `GuardApiError` (`failOpen: false`). **Behaviour change for existing
-  `scanResponses: true` users:** streamed output now arrives a window at a
-  time, each after one Guard API round trip, and a stream can now end in an
-  error.
+  fail-open policy as `generateText()` output (acebot712/promptguard#961). A
+  Guard API outage mid-stream releases the held parts and leaves the rest of
+  that stream unscanned (`failOpen: true`, the default).
 
 ### Security
 

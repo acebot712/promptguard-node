@@ -8,15 +8,23 @@
  *
  * Streams are scanned in windows, then once more in full:
  *
- * - **Enforce mode** holds stream parts back until the text they carry has
- *   been scanned. Every `windowChars` characters of output, the window (plus
- *   the end of the previous one as context) is scanned and, if clean, its
- *   parts are released. When the model finishes, the complete text is scanned
- *   — the same text, built the same way, as a generated result — before the
- *   last window and the `finish` part are released. Nothing reaches the caller
- *   unscanned, and at most one window is held at a time.
+ * - **Enforce mode** holds back the stream parts that carry scanned text
+ *   (text deltas, tool-call input) until that text has been scanned. Each
+ *   time `windowChars` new characters have arrived, everything held is
+ *   scanned and, if clean, released — except the last `WINDOW_OVERLAP_CHARS`
+ *   characters, which stay held and are scanned again at the head of the next
+ *   window. So every released character has been scanned together with at
+ *   least the overlap that follows it, and a secret up to the overlap long is
+ *   always seen whole before any of it is released. When the model finishes,
+ *   the complete text is scanned — the same text, built the same way, as a
+ *   generated result — before the held tail and the `finish` part are
+ *   released. Parts that carry no scanned text (stream start, reasoning,
+ *   sources, files, metadata) are delivered at once when nothing is held
+ *   ahead of them, and queue behind held text otherwise, so order is kept.
  * - **Monitor mode** never stops a call, so it never holds one: parts pass
  *   through as they arrive and only the complete text is scanned, at the end.
+ *
+ * Reasoning is not scanned, here or on the generated path.
  *
  * A block (or an output redact, which cannot be honoured on text already
  * generated) stops the stream with `PromptGuardBlockedError`. A Guard API
@@ -29,14 +37,25 @@
 import { GuardApiError, type GuardClient, PromptGuardBlockedError, safeErrorLabel } from "../guard"
 import { logger } from "../logger"
 
-/** Default characters of streamed output per scanned window. */
+/**
+ * Default new characters of streamed output per scanned window.
+ *
+ * Not taken from any external standard: 1000 was chosen as a balance between
+ * how long output is held and how many Guard API round trips a stream costs.
+ * At roughly four characters a token it is about 250 tokens, which takes a
+ * model a few seconds to generate — about as long as one Guard round trip, so
+ * scanning a window roughly keeps pace with generating the next. A smaller
+ * window delivers the first text sooner and costs more scans; a larger one
+ * costs fewer scans and holds output longer.
+ */
 export const DEFAULT_STREAM_WINDOW_CHARS = 1000
 
 /**
- * Characters of already-scanned output prepended to each window, so content
- * split across a window boundary is still seen whole.
+ * Characters of scanned text always kept held and rescanned at the head of
+ * the next window — the longest secret guaranteed to be seen whole across a
+ * window boundary.
  */
-const WINDOW_CONTEXT_CHARS = 200
+export const WINDOW_OVERLAP_CHARS = 200
 
 export interface OutputScanPolicy {
   guard: GuardClient
@@ -55,17 +74,23 @@ export function validateWindowChars(value: number): number {
 }
 
 /**
- * Scan one piece of model output. Returns `true` when it was scanned and may
- * be delivered, `false` when the Guard API was unreachable and fail-open let
- * it through unscanned. Throws `PromptGuardBlockedError` when enforce mode
- * stops it, and rethrows the `GuardApiError` when failing closed.
+ * What happened to a piece of output that was allowed through: `"scanned"`
+ * when the Guard API saw it, `"failed-open"` when it was unreachable and
+ * fail-open let the output through unscanned.
+ */
+export type OutputScanOutcome = "scanned" | "failed-open"
+
+/**
+ * Scan one piece of model output. Resolves when the output may be delivered;
+ * throws `PromptGuardBlockedError` when enforce mode stops it, and rethrows
+ * the `GuardApiError` when failing closed.
  */
 export async function scanOutputText(
   text: string,
   policy: OutputScanPolicy,
   modelId: string | undefined,
   what = "response",
-): Promise<boolean> {
+): Promise<OutputScanOutcome> {
   try {
     const decision = await policy.guard.scan(
       [{ role: "assistant", content: text }],
@@ -81,7 +106,7 @@ export async function scanOutputText(
         `[monitor] would ${decision.redacted ? "redact" : "block"} ${what}: ${decision.threatType}`,
       )
     }
-    return true
+    return "scanned"
   } catch (err) {
     if (err instanceof PromptGuardBlockedError) throw err
     // Only a Guard API outage is eligible for fail-open; rethrow the
@@ -91,7 +116,7 @@ export async function scanOutputText(
     logger.warn(
       `Guard API unavailable, ${what} left unscanned (failOpen=true): ${safeErrorLabel(err)}`,
     )
-    return false
+    return "failed-open"
   }
 }
 
@@ -227,22 +252,28 @@ export function scanOutputStream<T>(
   const enforce = policy.mode === "enforce"
   const what = "streamed response"
 
-  let pending: T[] = []
-  /** Every window's text so far, for context on the next window. */
-  let seen = ""
-  /** Text of the current window, not yet scanned. */
-  let windowText = ""
+  /** Held parts, in order, with the scanned text each carries. */
+  let held: { part: T; text: string }[] = []
+  /** Total length of the text carried by `held`. */
+  let heldChars = 0
+  /** Characters that have arrived since the last window scan. */
+  let unscannedChars = 0
   /** Set once fail-open has given up on this stream. */
   let unscanned = false
 
-  const release = (controller: TransformStreamDefaultController<T>) => {
-    for (const part of pending) controller.enqueue(part)
-    pending = []
+  const releaseAll = (controller: TransformStreamDefaultController<T>) => {
+    for (const { part } of held) controller.enqueue(part)
+    held = []
+    heldChars = 0
   }
 
-  const failedOpen = (controller: TransformStreamDefaultController<T>) => {
-    unscanned = true
-    release(controller)
+  /** Release from the front while the overlap stays held behind it. */
+  const releaseScanned = (controller: TransformStreamDefaultController<T>) => {
+    while (held.length && heldChars - held[0].text.length >= WINDOW_OVERLAP_CHARS) {
+      const front = held.shift() as { part: T; text: string }
+      heldChars -= front.text.length
+      controller.enqueue(front.part)
+    }
   }
 
   return stream.pipeThrough(
@@ -252,27 +283,35 @@ export function scanOutputStream<T>(
           controller.enqueue(part)
           return
         }
-        const added =
-          part && typeof part === "object" ? output.add(part as Record<string, unknown>) : ""
+        const record = part && typeof part === "object" ? (part as Record<string, unknown>) : null
+        const text = record ? output.add(record) : ""
 
         if (!enforce) {
           controller.enqueue(part)
           return
         }
 
-        pending.push(part)
-        windowText += added
-        if (windowText.length < policy.windowChars) return
+        // Nothing to scan and nothing ahead of it: no reason to hold it. The
+        // finish part always waits for the final scan.
+        if (!text && !held.length && record?.type !== "finish") {
+          controller.enqueue(part)
+          return
+        }
 
-        const context = seen.slice(-WINDOW_CONTEXT_CHARS)
-        seen += windowText
-        const scanText = context + windowText
-        windowText = ""
+        held.push({ part, text })
+        heldChars += text.length
+        unscannedChars += text.length
+        if (unscannedChars < policy.windowChars) return
+
+        unscannedChars = 0
+        const window = held.map((h) => h.text).join("")
         // Throws on block or fail-closed, which errors the stream with it.
-        if (await scanOutputText(scanText, policy, modelId, `rest of ${what}`)) {
-          release(controller)
+        const outcome = await scanOutputText(window, policy, modelId, `rest of ${what}`)
+        if (outcome === "scanned") {
+          releaseScanned(controller)
         } else {
-          failedOpen(controller)
+          unscanned = true
+          releaseAll(controller)
         }
       },
 
@@ -280,7 +319,7 @@ export function scanOutputStream<T>(
         if (unscanned) return
         const text = output.text()
         if (text) await scanOutputText(text, policy, modelId, what)
-        release(controller)
+        releaseAll(controller)
       },
     }),
   )

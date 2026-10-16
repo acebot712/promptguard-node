@@ -202,7 +202,8 @@ describe("promptGuardMiddleware wrapStream", () => {
     ]
     const out = await drain(await wrap(middleware(), streamOf(parts)))
     expect(out.error).toBeInstanceOf(PromptGuardBlockedError)
-    expect(out.parts).toEqual([])
+    // Only tool-input-start, which carries no input, gets through.
+    expect(out.parts).toEqual([parts[0]])
     // The final scan carries the call's input once, as the non-streamed path does.
     expect(guardBodies(fetchMock)).toEqual([
       { direction: "output", content: '{"ssn":"123-45-6789"}' },
