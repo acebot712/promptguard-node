@@ -415,6 +415,7 @@ try {
           if (how === "fullStream")
             for await (const p of result.fullStream) if (p.type === "error") errorParts.push(named(p.error))
           if (how === "text") return await result.text
+          if (how === "finishReason") return await result.finishReason
           if (how === "response") {
             const response = result.toTextStreamResponse()
             return response.status + ":" + (await response.text())
@@ -429,18 +430,26 @@ try {
 
     const report = {}
     for (const [name, model] of Object.entries(models))
-      for (const how of ["textStream", "fullStream", "text", "response"])
+      for (const how of ["textStream", "fullStream", "text", "finishReason", "response"])
         report[name + " " + how] = await read(model(), how)
     // What ai@5 then does, pinned: onError gets the block; fullStream carries
     // it as an error part; textStream ends without throwing; result.text and
     // the text response resolve with what was released before the block
-    // (here, nothing).
+    // (here, nothing); result.finishReason resolves with "error", the signal
+    // the README gives a caller that reads only the text.
     for (const [k, r] of Object.entries(report)) {
       const how = k.split(" ")[1]
       const expected = {
         errors: ["PromptGuardBlockedError"],
         errorParts: how === "fullStream" ? ["PromptGuardBlockedError"] : [],
-        outcome: how === "text" ? { value: "" } : how === "response" ? { value: "200:" } : {},
+        outcome:
+          how === "text"
+            ? { value: "" }
+            : how === "finishReason"
+              ? { value: "error" }
+              : how === "response"
+                ? { value: "200:" }
+                : {},
       }
       if (JSON.stringify(r) !== JSON.stringify({ outcome: expected.outcome, errors: expected.errors, errorParts: expected.errorParts }))
         throw new Error(k + ": " + JSON.stringify(r))
