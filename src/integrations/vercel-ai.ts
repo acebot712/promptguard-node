@@ -53,6 +53,7 @@ import {
   DEFAULT_STREAM_WINDOW_CHARS,
   extractGeneratedText,
   type OutputScanPolicy,
+  type StreamStop,
   scanOutputStream,
   scanOutputText,
   validateWindowChars,
@@ -263,6 +264,7 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions = {}
               stream as ReadableStream,
               outputPolicy,
               modelIdOf(model, params),
+              streamStopFor(model),
             ),
           } as R
         }
@@ -363,7 +365,26 @@ function isLanguageModel(value: unknown): value is LanguageModelLike {
 
 /** What the hooks read from the model `wrapLanguageModel` hands them. */
 interface ModelIdentity {
+  readonly specificationVersion?: unknown
   readonly modelId?: unknown
+}
+
+/**
+ * How a stream PromptGuard stops ends, by the specification version of the
+ * model being streamed.
+ *
+ * A V2 model is the one ai@5 drives, and ai@5 settles `await result.text`
+ * only when a stream finishes or reports an `error` part: if the stream
+ * itself errors, that promise never settles. So a V2 stream ends with an
+ * `error` part carrying the error, which ai@5 hands to `onError` and to
+ * `fullStream`. Every other version keeps erroring the stream, which ai@6
+ * and ai@7 throw from whatever reads it — `textStream` included, so a
+ * caller that reads only text cannot mistake a blocked answer for a short
+ * one. The version is the only signal available: this package never
+ * imports `ai`, so it cannot ask which `ai` is calling.
+ */
+function streamStopFor(model: ModelIdentity | undefined): StreamStop {
+  return model?.specificationVersion === "v2" ? "error-part" : "error"
 }
 
 /**

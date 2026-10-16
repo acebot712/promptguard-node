@@ -61,10 +61,19 @@ survives three releases is a changelog nobody is maintaining.
   never puts it, so every input and output scan reached the Guard API with
   no model. It now takes the id from the model the AI SDK hands its hooks,
   for generated and streamed calls, and `promptguard(model)` does the same.
-- **The README now says how a blocked stream reaches `streamText()`.** It
-  said `onError` and an `error` part; that holds only for a blocked prompt.
-  Blocked output is thrown from whatever reads the stream and never reaches
-  `onError`, and on ai@5 `await result.text` never settles.
+- **A blocked streamed output no longer hangs ai@5's `await result.text`.**
+  The middleware stopped a blocked stream by erroring it, and ai@5 never
+  settles `result.text` on an errored stream. For a V2 model (the version
+  ai@5 drives) a block, or a fail-closed `GuardApiError`, now ends the stream
+  with the AI SDK's `error` part and closes it: `onError` and `fullStream`
+  get the error, and `textStream`, `result.text` and `toTextStreamResponse()`
+  end with the text released before the block. V3 and V4 models (ai@6,
+  ai@7) still error the stream, so reading it throws.
+- **The README now says how a blocked stream reaches `streamText()`**, for
+  each case and specification version. It said `onError` and an `error`
+  part; on ai@6 and ai@7 that holds only for a blocked prompt, since blocked
+  output is thrown from whatever reads the stream and never reaches
+  `onError`.
 - **`promptGuardMiddleware()` now type-checks with the real `ai` types.**
   Passing it to `wrapLanguageModel` was a TypeScript error on ai@5, ai@6 and
   ai@7: `transformParams` returned `Record<string, unknown>` where each

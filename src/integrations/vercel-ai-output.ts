@@ -32,6 +32,11 @@
  * rest of that stream passes unscanned, so an outage costs one failed scan per
  * stream rather than one per window. With `failOpen: false` it stops the
  * stream with the `GuardApiError` instead.
+ *
+ * How a stopped stream ends is the caller's choice (`StreamStop`): by
+ * erroring it, so whatever reads it throws, or by delivering one AI SDK
+ * `error` part and closing it. Either way nothing held is released and the
+ * `finish` part never arrives.
  */
 
 import { GuardApiError, type GuardClient, PromptGuardBlockedError, safeErrorLabel } from "../guard"
@@ -238,15 +243,24 @@ function str(value: unknown): string | undefined {
 }
 
 /**
+ * How a stream the policy stops ends: `"error"` errors the stream, so the
+ * reader's next read throws the error; `"error-part"` delivers one
+ * `{ type: "error", error }` stream part — the AI SDK's own way for a model to
+ * report a failure mid-stream — and then closes the stream.
+ */
+export type StreamStop = "error" | "error-part"
+
+/**
  * Wrap a model stream so its output is scanned as described in this module's
- * header. Parts are passed through unchanged and in order; the returned
- * stream errors with `PromptGuardBlockedError` (or `GuardApiError` when
- * failing closed) instead of delivering output the policy stops.
+ * header. Parts are passed through unchanged and in order; where the policy
+ * stops the output, the stream ends with `PromptGuardBlockedError` (or the
+ * `GuardApiError` when failing closed), as `stopAs` says.
  */
 export function scanOutputStream<T>(
   stream: ReadableStream<T>,
   policy: OutputScanPolicy,
   modelId: string | undefined,
+  stopAs: StreamStop = "error",
 ): ReadableStream<T> {
   const output = new StreamedOutput()
   const enforce = policy.mode === "enforce"
@@ -260,6 +274,8 @@ export function scanOutputStream<T>(
   let unscannedChars = 0
   /** Set once fail-open has given up on this stream. */
   let unscanned = false
+  /** Set once the stream has ended with an error part. */
+  let stopped = false
 
   const releaseAll = (controller: TransformStreamDefaultController<T>) => {
     for (const { part } of held) controller.enqueue(part)
@@ -279,48 +295,75 @@ export function scanOutputStream<T>(
   return stream.pipeThrough(
     new TransformStream<T, T>({
       async transform(part, controller) {
-        if (unscanned) {
-          controller.enqueue(part)
-          return
-        }
-        const record = part && typeof part === "object" ? (part as Record<string, unknown>) : null
-        const text = record ? output.add(record) : ""
-
-        if (!enforce) {
-          controller.enqueue(part)
-          return
-        }
-
-        // Nothing to scan and nothing ahead of it: no reason to hold it. The
-        // finish part always waits for the final scan.
-        if (!text && !held.length && record?.type !== "finish") {
-          controller.enqueue(part)
-          return
-        }
-
-        held.push({ part, text })
-        heldChars += text.length
-        unscannedChars += text.length
-        if (unscannedChars < policy.windowChars) return
-
-        unscannedChars = 0
-        const window = held.map((h) => h.text).join("")
-        // Throws on block or fail-closed, which errors the stream with it.
-        const outcome = await scanOutputText(window, policy, modelId, `rest of ${what}`)
-        if (outcome === "scanned") {
-          releaseScanned(controller)
-        } else {
-          unscanned = true
-          releaseAll(controller)
+        if (stopped) return
+        try {
+          await step(part, controller)
+        } catch (err) {
+          stop(err, controller)
+          // Ends the stream here, and cancels the model's stream behind it.
+          controller.terminate()
         }
       },
 
       async flush(controller) {
-        if (unscanned) return
-        const text = output.text()
-        if (text) await scanOutputText(text, policy, modelId, what)
-        releaseAll(controller)
+        if (stopped) return
+        try {
+          await finish(controller)
+        } catch (err) {
+          stop(err, controller)
+        }
       },
     }),
   )
+
+  /** End a stopped stream as `stopAs` says. */
+  function stop(err: unknown, controller: TransformStreamDefaultController<T>): void {
+    if (stopAs === "error") throw err
+    stopped = true
+    controller.enqueue({ type: "error", error: err } as T)
+  }
+
+  async function step(part: T, controller: TransformStreamDefaultController<T>): Promise<void> {
+    if (unscanned) {
+      controller.enqueue(part)
+      return
+    }
+    const record = part && typeof part === "object" ? (part as Record<string, unknown>) : null
+    const text = record ? output.add(record) : ""
+
+    if (!enforce) {
+      controller.enqueue(part)
+      return
+    }
+
+    // Nothing to scan and nothing ahead of it: no reason to hold it. The
+    // finish part always waits for the final scan.
+    if (!text && !held.length && record?.type !== "finish") {
+      controller.enqueue(part)
+      return
+    }
+
+    held.push({ part, text })
+    heldChars += text.length
+    unscannedChars += text.length
+    if (unscannedChars < policy.windowChars) return
+
+    unscannedChars = 0
+    const window = held.map((h) => h.text).join("")
+    // Throws on block or fail-closed, which stops the stream (see `stop`).
+    const outcome = await scanOutputText(window, policy, modelId, `rest of ${what}`)
+    if (outcome === "scanned") {
+      releaseScanned(controller)
+    } else {
+      unscanned = true
+      releaseAll(controller)
+    }
+  }
+
+  async function finish(controller: TransformStreamDefaultController<T>): Promise<void> {
+    if (unscanned) return
+    const text = output.text()
+    if (text) await scanOutputText(text, policy, modelId, what)
+    releaseAll(controller)
+  }
 }

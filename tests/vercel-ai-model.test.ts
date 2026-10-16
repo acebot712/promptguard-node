@@ -129,7 +129,11 @@ describe("promptguard(model)", () => {
       }
       const out = await drain(result.stream)
 
-      expect(out.error).toBeInstanceOf(PromptGuardBlockedError)
+      // A V2 stream ends with an error part (ai@5 hangs on an errored
+      // stream); later versions error the stream.
+      const stoppedWith =
+        spec === "v2" ? out.parts.find((p) => p.type === "error")?.error : out.error
+      expect(stoppedWith).toBeInstanceOf(PromptGuardBlockedError)
       expect(deliveredText(out.parts)).not.toContain("123-45-6789")
       expect(guardBodies(fetchMock)).toEqual([
         { direction: "input", content: "What is the customer's SSN?" },

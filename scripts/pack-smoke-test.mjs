@@ -307,7 +307,10 @@ try {
           if (how === "fullStream")
             for await (const p of result.fullStream) if (p.type === "error") errorParts.push(named(p.error))
           if (how === "text") return await result.text
-          if (how === "response") return await result.toTextStreamResponse().text()
+          if (how === "response") {
+            const response = result.toTextStreamResponse()
+            return response.status + ":" + (await response.text())
+          }
         })(),
         how,
       )
@@ -320,9 +323,20 @@ try {
     for (const [name, model] of Object.entries(models))
       for (const how of ["textStream", "fullStream", "text", "response"])
         report[name + " " + how] = await read(model(), how)
-    console.log(JSON.stringify(report))
-    for (const [k, r] of Object.entries(report))
-      if (r.errors.join() !== "PromptGuardBlockedError") throw new Error(k + ": onError got " + r.errors.join())
+    // What ai@5 then does, pinned: onError gets the block; fullStream carries
+    // it as an error part; textStream ends without throwing; result.text and
+    // the text response resolve with what was released before the block
+    // (here, nothing).
+    for (const [k, r] of Object.entries(report)) {
+      const how = k.split(" ")[1]
+      const expected = {
+        errors: ["PromptGuardBlockedError"],
+        errorParts: how === "fullStream" ? ["PromptGuardBlockedError"] : [],
+        outcome: how === "text" ? { value: "" } : how === "response" ? { value: "200:" } : {},
+      }
+      if (JSON.stringify(r) !== JSON.stringify({ outcome: expected.outcome, errors: expected.errors, errorParts: expected.errorParts }))
+        throw new Error(k + ": " + JSON.stringify(r))
+    }
   `
   fs.writeFileSync(path.join(ai5Dir, "ai-v5-check.mjs"), ai5Check)
   check("a blocked stream never hangs under ai@5 (V2), through the wrapper and the middleware", () => {
@@ -331,7 +345,7 @@ try {
       ["install", "--no-audit", "--no-fund", "--no-save", "--ignore-scripts", tarball, "ai@5.0.277", "zod@3.25.76"],
       { cwd: ai5Dir },
     )
-    console.log(run("node", ["ai-v5-check.mjs"], { cwd: ai5Dir }).trim())
+    run("node", ["ai-v5-check.mjs"], { cwd: ai5Dir })
   })
 } finally {
   fs.rmSync(workDir, { recursive: true, force: true })
