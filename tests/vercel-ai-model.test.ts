@@ -11,8 +11,9 @@ import { generateText, wrapLanguageModel } from "ai-v6"
 import { MockLanguageModelV3 } from "ai-v6/test"
 import { PromptGuardError } from "../src/client"
 import { PromptGuardBlockedError } from "../src/guard"
+import * as sdk from "../src/index"
 import {
-  type PromptGuardModelOptions,
+  type PromptGuardMiddlewareOptions,
   promptGuardMiddleware,
   promptguard,
 } from "../src/integrations/vercel-ai"
@@ -55,7 +56,7 @@ const OPTS = {
   apiKey: "pg_test",
   scanResponses: true,
   maxRetries: 0,
-} satisfies PromptGuardModelOptions
+} satisfies PromptGuardMiddlewareOptions
 
 describe("promptguard(model)", () => {
   const originalFetch = global.fetch
@@ -220,12 +221,16 @@ describe("promptguard(model)", () => {
     ).rejects.toBeInstanceOf(PromptGuardBlockedError)
   })
 
-  test("forwards getters and methods of a class-based model", () => {
+  test("forwards a class-based model's getters and stays an instance of its class", async () => {
     const model = new MockLanguageModelV3({ supportedUrls: { "image/*": [/^https:/] } })
     const wrapped = promptguard(model, OPTS)
     // `supportedUrls` is a getter over a private field of the instance.
-    expect(wrapped.supportedUrls).toEqual({ "image/*": [/^https:/] })
+    expect(await wrapped.supportedUrls).toEqual({ "image/*": [/^https:/] })
     expect(wrapped).toBeInstanceOf(MockLanguageModelV3)
+  })
+
+  test("is exported from the package root too", () => {
+    expect(sdk.promptguard).toBe(promptguard)
   })
 
   test("reads the API key from PROMPTGUARD_API_KEY when none is passed", () => {

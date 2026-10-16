@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..")
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf-8"))
@@ -134,13 +134,14 @@ try {
     'import { init } from "promptguard-sdk/auto"',
     'import { GuardClient } from "promptguard-sdk/guard"',
     'import { PromptGuardCallbackHandler } from "promptguard-sdk/integrations/langchain"',
-    'import { promptGuardMiddleware } from "promptguard-sdk/integrations/vercel-ai"',
+    'import { promptGuardMiddleware, promptguard } from "promptguard-sdk/integrations/vercel-ai"',
     'import { PromptGuard } from "promptguard-sdk"',
     'import type { ChatCompletionRequest, ToolValidationResult } from "promptguard-sdk"',
     "void init",
     "void GuardClient",
     "void PromptGuardCallbackHandler",
     "void promptGuardMiddleware",
+    "void promptguard",
     "void PromptGuard",
     "const _req: ChatCompletionRequest | null = null",
     "const _tool: ToolValidationResult | null = null",
@@ -170,6 +171,62 @@ try {
   fs.writeFileSync(path.join(appDir, "tsconfig.types-check.json"), typesCheckTsconfig)
   check('subpath types resolve under moduleResolution:"node" (classic)', () => {
     run(process.execPath, [tscBin, "-p", "tsconfig.types-check.json"], { cwd: appDir })
+  })
+
+  // ai@7 is ESM-only and this package is CommonJS, so the packed
+  // `promptguard()` is run under the real ai@7 (the `ai-v7` devDependency):
+  // a generated call is scanned both ways, and a streamed secret is blocked
+  // before any of it reaches the application. The Guard API is stubbed.
+  const aiV7 = (file) =>
+    JSON.stringify(pathToFileURL(path.join(root, "node_modules", "ai-v7", "dist", file)).href)
+  const aiV7Check = `
+    import { generateText, streamText } from ${aiV7("index.js")}
+    import { MockLanguageModelV4 } from ${aiV7("test/index.js")}
+    import { PromptGuardBlockedError } from "promptguard-sdk"
+    import { promptguard } from "promptguard-sdk/integrations/vercel-ai"
+
+    const answers = ["allow", "allow", "allow", "block"]
+    const seen = []
+    globalThis.fetch = async (_url, init) => {
+      seen.push(JSON.parse(init.body).direction)
+      const decision = answers.shift()
+      return { ok: true, status: 200, json: async () => ({ decision, event_id: "e", confidence: 0.9, threats: [] }) }
+    }
+    const finishReason = { unified: "stop", raw: "stop" }
+    const usage = { inputTokens: { total: 1 }, outputTokens: { total: 1 } }
+    const model = promptguard(
+      new MockLanguageModelV4({
+        doGenerate: { content: [{ type: "text", text: "Hello back." }], finishReason, usage, warnings: [] },
+        doStream: {
+          stream: new ReadableStream({
+            start(c) {
+              c.enqueue({ type: "text-delta", id: "t", delta: "SSN 123-45-6789" })
+              c.enqueue({ type: "finish", finishReason, usage })
+              c.close()
+            },
+          }),
+        },
+      }),
+      { apiKey: "pg_test", scanResponses: true, maxRetries: 0 },
+    )
+    if (model.specificationVersion !== "v4") throw new Error("specification version changed")
+
+    const { text } = await generateText({ model, prompt: "Hi" })
+    if (text !== "Hello back.") throw new Error("generateText returned " + JSON.stringify(text))
+
+    let delivered = ""
+    let blocked = false
+    try {
+      for await (const t of streamText({ model, prompt: "Hi", onError() {} }).textStream) delivered += t
+    } catch (error) {
+      blocked = error instanceof PromptGuardBlockedError
+    }
+    if (!blocked || delivered) throw new Error("stream not blocked: " + JSON.stringify(delivered))
+    if (seen.join() !== "input,output,input,output") throw new Error("Guard calls: " + seen.join())
+  `
+  fs.writeFileSync(path.join(appDir, "ai-v7-check.mjs"), aiV7Check)
+  check("promptguard() runs under ai@7 (ESM-only), generated and streamed", () => {
+    run("node", ["ai-v7-check.mjs"], { cwd: appDir })
   })
 } finally {
   fs.rmSync(workDir, { recursive: true, force: true })

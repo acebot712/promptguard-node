@@ -240,25 +240,36 @@ The callback handler provides rich context to PromptGuard - chain names, tool ca
 
 ### Vercel AI SDK
 
+Supports `ai` 5, 6 and 7. Wrap the model with `promptguard()` and use it wherever you used the original:
+
 ```typescript
 import { openai } from '@ai-sdk/openai';
-import { wrapLanguageModel, generateText } from 'ai';
+import { generateText, streamText } from 'ai';
+import { promptguard } from 'promptguard-sdk/integrations/vercel-ai';
+
+const model = promptguard(openai('gpt-5-nano'), {
+  apiKey: 'pg_live_xxx', // default: PROMPTGUARD_API_KEY
+  mode: 'enforce',
+  scanResponses: true,
+});
+
+const { text } = await generateText({ model, prompt: 'Hello!' });
+const result = streamText({ model, prompt: 'Hello again!' });
+```
+
+The wrapped model keeps the original's specification version, provider, model id and type. If you already compose AI SDK middleware, `promptGuardMiddleware()` takes the same options and scans the same way:
+
+```typescript
+import { wrapLanguageModel } from 'ai';
 import { promptGuardMiddleware } from 'promptguard-sdk/integrations/vercel-ai';
 
 const model = wrapLanguageModel({
   model: openai('gpt-5-nano'),
-  middleware: promptGuardMiddleware({
-    apiKey: 'pg_live_xxx',
-    mode: 'enforce',
-    scanResponses: true,
-  }),
-});
-
-const { text } = await generateText({
-  model,
-  prompt: 'Hello!',
+  middleware: [promptGuardMiddleware({ scanResponses: true }) /* , ...yours */],
 });
 ```
+
+Input is scanned before every call. In enforce mode a block throws `PromptGuardBlockedError` before the model is called, and a redaction rewrites the prompt the model receives.
 
 With `scanResponses: true`, streamed output (`streamText()`) is scanned as well as generated output, with the same decisions and the same fail-open policy:
 
@@ -404,7 +415,7 @@ What to do:
 - **Verify at runtime** with [`verify()`](#confirming-protection-is-actually-live), which makes real calls and reports what came back, or with `getAppliedPatches()` for the patch list alone — and note that a patch being listed proves the CJS build was patched, not that your ESM imports go through it. `init()` also logs a warning when it applies zero patches.
 - **Prefer the ESM-safe APIs**, which don't rely on module patching:
   - LangChain: `PromptGuardCallbackHandler` (`promptguard-sdk/integrations/langchain`)
-  - Vercel AI SDK: `promptGuardMiddleware` (`promptguard-sdk/integrations/vercel-ai`)
+  - Vercel AI SDK: `promptguard(model)` or `promptGuardMiddleware` (`promptguard-sdk/integrations/vercel-ai`)
   - Any framework: explicit `GuardClient.scan()` calls around your LLM invocations
 - Transpiled-to-CJS TypeScript apps (the common `tsc`/`ts-node` default) are **not** affected — their `import`s compile to `require()` and hit the patched modules.
 

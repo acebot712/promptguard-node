@@ -14,6 +14,18 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Added
 
+- **`promptguard(model)` for the Vercel AI SDK**
+  (`promptguard-sdk/integrations/vercel-ai`). Wraps a language model so its
+  calls are scanned exactly as `promptGuardMiddleware` scans them under
+  `wrapLanguageModel`, for `generateText()` and `streamText()` alike, and
+  takes the same options. The wrapped model keeps the original's own
+  specification version, provider, model id and other properties, and its
+  type, so it goes wherever the original went
+  (acebot712/promptguard#976). It does not import `ai`, so it works with
+  ai@7, which is ESM-only, from this CommonJS package.
+- **`promptGuardMiddleware()` no longer needs `apiKey`.** It falls back to
+  `PROMPTGUARD_API_KEY`, as it already did at runtime; only the type required
+  it.
 - **`streamWindowChars` option for the Vercel AI SDK middleware.** How many
   new characters of streamed output enforce mode collects before scanning
   (default `1000`, chosen to balance how long text is held against Guard API
@@ -22,6 +34,13 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Changed
 
+- **The `ai` peer range is now `^5.0.0 || ^6.0.0 || ^7.0.0`** (was
+  `>=3.0.0`). Those are the majors the Vercel AI SDK integration is
+  type-checked against in this repo's tests. Most ai@3 releases had no
+  middleware at all, and ai@4 has had no release since 4.3.19 (July 2025)
+  while its dependency tree carries open advisories with no 4.x fix, so
+  neither is tested here. The code that reads AI SDK 4 (LanguageModelV1)
+  calls is unchanged.
 - **Streamed output from the Vercel AI SDK middleware is now delivered after
   it is scanned.** With `scanResponses: true` in enforce mode, text arrives in
   bursts, each after one Guard API round trip, instead of token by token: each
@@ -37,6 +56,13 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Fixed
 
+- **`promptGuardMiddleware()` now type-checks with the real `ai` types.**
+  Passing it to `wrapLanguageModel` was a TypeScript error on ai@5, ai@6 and
+  ai@7: `transformParams` returned `Record<string, unknown>` where each
+  expects its call options, and ai@6 also requires
+  `specificationVersion: 'v3'` on the middleware. Its hooks are now generic
+  over what they pass through, and it carries `specificationVersion: 'v3'`,
+  which ai@7 accepts and ai@5 ignores. Runtime behaviour is unchanged.
 - **The Vercel AI SDK middleware now scans streamed output.** With
   `scanResponses: true`, `streamText()` output used to reach the application
   unscanned (`wrapStream` only logged the skip), so a streamed secret or PII
