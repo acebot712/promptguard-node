@@ -175,8 +175,10 @@ try {
 
   // ai@7 is ESM-only and this package is CommonJS, so the packed
   // `promptguard()` is run under the real ai@7 (the `ai-v7` devDependency):
-  // a generated call is scanned both ways, and a streamed secret is blocked
-  // before any of it reaches the application. The Guard API is stubbed.
+  // a generated call is scanned both ways with the model's id, and a blocked
+  // stream surfaces as the README says — blocked output throws from
+  // `textStream` without calling `onError`; a blocked prompt goes to
+  // `onError` and `textStream` ends empty. The Guard API is stubbed.
   const aiV7 = (file) =>
     JSON.stringify(pathToFileURL(path.join(root, "node_modules", "ai-v7", "dist", file)).href)
   const aiV7Check = `
@@ -185,10 +187,11 @@ try {
     import { PromptGuardBlockedError } from "promptguard-sdk"
     import { promptguard } from "promptguard-sdk/integrations/vercel-ai"
 
-    const answers = ["allow", "allow", "allow", "block"]
+    const answers = ["allow", "allow", "allow", "block", "block"]
     const seen = []
     globalThis.fetch = async (_url, init) => {
-      seen.push(JSON.parse(init.body).direction)
+      const body = JSON.parse(init.body)
+      seen.push(body.direction + ":" + body.model)
       const decision = answers.shift()
       return { ok: true, status: 200, json: async () => ({ decision, event_id: "e", confidence: 0.9, threats: [] }) }
     }
@@ -197,7 +200,7 @@ try {
     const model = promptguard(
       new MockLanguageModelV4({
         doGenerate: { content: [{ type: "text", text: "Hello back." }], finishReason, usage, warnings: [] },
-        doStream: {
+        doStream: async () => ({
           stream: new ReadableStream({
             start(c) {
               c.enqueue({ type: "text-delta", id: "t", delta: "SSN 123-45-6789" })
@@ -205,7 +208,7 @@ try {
               c.close()
             },
           }),
-        },
+        }),
       }),
       { apiKey: "pg_test", scanResponses: true, maxRetries: 0 },
     )
@@ -214,18 +217,32 @@ try {
     const { text } = await generateText({ model, prompt: "Hi" })
     if (text !== "Hello back.") throw new Error("generateText returned " + JSON.stringify(text))
 
-    let delivered = ""
-    let blocked = false
-    try {
-      for await (const t of streamText({ model, prompt: "Hi", onError() {} }).textStream) delivered += t
-    } catch (error) {
-      blocked = error instanceof PromptGuardBlockedError
+    async function stream() {
+      const errors = []
+      let delivered = ""
+      let thrown
+      try {
+        const result = streamText({ model, prompt: "Hi", onError: ({ error }) => errors.push(error) })
+        for await (const t of result.textStream) delivered += t
+      } catch (error) {
+        thrown = error
+      }
+      return { errors, delivered, thrown }
     }
-    if (!blocked || delivered) throw new Error("stream not blocked: " + JSON.stringify(delivered))
-    if (seen.join() !== "input,output,input,output") throw new Error("Guard calls: " + seen.join())
+
+    const output = await stream()
+    if (!(output.thrown instanceof PromptGuardBlockedError) || output.delivered || output.errors.length)
+      throw new Error("blocked output: " + JSON.stringify(output))
+
+    const input = await stream()
+    if (input.thrown || input.delivered || !(input.errors[0] instanceof PromptGuardBlockedError))
+      throw new Error("blocked input: " + JSON.stringify(input))
+
+    const expected = "input,output,input,output,input".split(",").map((d) => d + ":mock-model-id")
+    if (seen.join() !== expected.join()) throw new Error("Guard calls: " + seen.join())
   `
   fs.writeFileSync(path.join(appDir, "ai-v7-check.mjs"), aiV7Check)
-  check("promptguard() runs under ai@7 (ESM-only), generated and streamed", () => {
+  check("promptguard() runs under ai@7 (ESM-only), generated and streamed, blocked both ways", () => {
     run("node", ["ai-v7-check.mjs"], { cwd: appDir })
   })
 } finally {

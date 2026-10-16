@@ -7,7 +7,7 @@
  * provider and model id, same properties.
  */
 
-import { generateText, wrapLanguageModel } from "ai-v6"
+import { generateText, streamText, wrapLanguageModel } from "ai-v6"
 import { MockLanguageModelV3 } from "ai-v6/test"
 import { PromptGuardError } from "../src/client"
 import { PromptGuardBlockedError } from "../src/guard"
@@ -219,6 +219,94 @@ describe("promptguard(model)", () => {
     await expect(
       generateText({ model: promptguard(model, OPTS), prompt: "Hello!" }),
     ).rejects.toBeInstanceOf(PromptGuardBlockedError)
+  })
+
+  describe("the Guard API is told which model made the call", () => {
+    /** The `model` field of every Guard request, in order. */
+    const guardModels = (fetchMock: jest.Mock) =>
+      fetchMock.mock.calls.map((call) => JSON.parse(call[1].body as string).model)
+
+    const viaMiddleware = (m: ReturnType<typeof fakeModel>) =>
+      wrapLanguageModel({
+        model: m as never,
+        middleware: promptGuardMiddleware(OPTS),
+      }) as unknown as ReturnType<typeof fakeModel>
+    const viaWrapper = (m: ReturnType<typeof fakeModel>) => promptguard(m, OPTS)
+
+    test.each([
+      ["promptguard(model)", viaWrapper],
+      ["the middleware under wrapLanguageModel", viaMiddleware],
+    ])("%s, generated and streamed, input and output", async (_label, wrap) => {
+      // The AI SDK puts no model id in the call options: it is on the model.
+      const generated = guardFetchSequence(ALLOW, ALLOW)
+      global.fetch = generated
+      await wrap(fakeModel("v3")).doGenerate({ prompt: PROMPT })
+      expect(guardModels(generated)).toEqual(["gpt-5-nano", "gpt-5-nano"])
+
+      const streamed = guardFetchSequence(ALLOW, ALLOW)
+      global.fetch = streamed
+      const result = (await wrap(fakeModel("v3")).doStream({ prompt: PROMPT })) as {
+        stream: ReadableStream<Part>
+      }
+      await drain(result.stream)
+      expect(guardModels(streamed)).toEqual(["gpt-5-nano", "gpt-5-nano"])
+    })
+  })
+
+  describe("how a blocked stream reaches an ai@6 streamText caller", () => {
+    // Recorded against the real ai@6 here, and ai@7 in the pack smoke test;
+    // the README states the same, so a change in either shows up as a failure.
+    function streaming(onError: jest.Mock) {
+      const usage = {
+        inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 1, text: 1, reasoning: 0 },
+      }
+      const model = new MockLanguageModelV3({
+        doStream: async () => ({
+          stream: streamOf([
+            { type: "text-start", id: "t" },
+            { type: "text-delta", id: "t", delta: LEAKED_TEXT },
+            { type: "text-end", id: "t" },
+            { type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage },
+          ]) as never,
+        }),
+      })
+      return streamText({ model: promptguard(model, OPTS), prompt: "Hello!", onError })
+    }
+
+    async function readText(result: ReturnType<typeof streaming>) {
+      let text = ""
+      try {
+        for await (const chunk of result.textStream) text += chunk
+      } catch (error) {
+        return { text, thrown: error }
+      }
+      return { text }
+    }
+
+    test("blocked output: textStream throws PromptGuardBlockedError; onError is not called", async () => {
+      global.fetch = guardFetchSequence(ALLOW, BLOCK)
+      const onError = jest.fn()
+      const out = await readText(streaming(onError))
+      expect(out.thrown).toBeInstanceOf(PromptGuardBlockedError)
+      expect(out.text).toBe("")
+      expect(onError).not.toHaveBeenCalled()
+    })
+
+    test("blocked input: onError and an error part get PromptGuardBlockedError; textStream ends empty", async () => {
+      global.fetch = guardFetchSequence(BLOCK)
+      const onError = jest.fn()
+      const result = streaming(onError)
+      const errorParts: unknown[] = []
+      for await (const part of result.fullStream)
+        if (part.type === "error") errorParts.push(part.error)
+      expect(errorParts).toHaveLength(1)
+      expect(errorParts[0]).toBeInstanceOf(PromptGuardBlockedError)
+      expect(onError.mock.calls[0][0].error).toBeInstanceOf(PromptGuardBlockedError)
+
+      global.fetch = guardFetchSequence(BLOCK)
+      expect(await readText(streaming(jest.fn()))).toEqual({ text: "" })
+    })
   })
 
   test("forwards a class-based model's getters and stays an instance of its class", async () => {
