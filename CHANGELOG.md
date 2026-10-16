@@ -22,6 +22,10 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Changed
 
+- `SECURITY.md` links to the published disclosure policy
+  (https://promptguard.co/security#reporting-a-vulnerability) instead of
+  keeping its own copy of the response times.
+
 - **Streamed output from the Vercel AI SDK middleware is now delivered after
   it is scanned.** With `scanResponses: true` in enforce mode, text arrives in
   bursts, each after one Guard API round trip, instead of token by token: each
