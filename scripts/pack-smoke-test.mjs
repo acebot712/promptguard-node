@@ -17,7 +17,7 @@ import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..")
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf-8"))
@@ -134,13 +134,14 @@ try {
     'import { init } from "promptguard-sdk/auto"',
     'import { GuardClient } from "promptguard-sdk/guard"',
     'import { PromptGuardCallbackHandler } from "promptguard-sdk/integrations/langchain"',
-    'import { promptGuardMiddleware } from "promptguard-sdk/integrations/vercel-ai"',
+    'import { promptGuardMiddleware, promptguard } from "promptguard-sdk/integrations/vercel-ai"',
     'import { PromptGuard } from "promptguard-sdk"',
     'import type { ChatCompletionRequest, ToolValidationResult } from "promptguard-sdk"',
     "void init",
     "void GuardClient",
     "void PromptGuardCallbackHandler",
     "void promptGuardMiddleware",
+    "void promptguard",
     "void PromptGuard",
     "const _req: ChatCompletionRequest | null = null",
     "const _tool: ToolValidationResult | null = null",
@@ -170,6 +171,330 @@ try {
   fs.writeFileSync(path.join(appDir, "tsconfig.types-check.json"), typesCheckTsconfig)
   check('subpath types resolve under moduleResolution:"node" (classic)', () => {
     run(process.execPath, [tscBin, "-p", "tsconfig.types-check.json"], { cwd: appDir })
+  })
+
+  // `promptguard(model)` must behave exactly like `promptGuardMiddleware`
+  // under the AI SDK's own `wrapLanguageModel`. The same script runs under
+  // ai@5 with a V2 model and under ai@7 with a V4 model: each call, generated
+  // and streamed, allowed, blocked either way and redacted, must make the
+  // same Guard requests and give the caller the same result through both.
+  // `imports` provides `wrapLanguageModel`; `mock` is a model factory.
+  const equivalenceCheck = ({ imports, mock }) => `
+    ${imports}
+    import { promptguard, promptGuardMiddleware } from "promptguard-sdk/integrations/vercel-ai"
+
+    const ALLOW = { decision: "allow", event_id: "e", confidence: 0, threats: [] }
+    const BLOCK = { decision: "block", event_id: "e", confidence: 0.9, threat_type: "pii", threats: [] }
+    const REDACT = { decision: "redact", event_id: "e", confidence: 0.8, redacted_messages: [{ role: "assistant", content: "[REDACTED]" }], threats: [] }
+    let answers = []
+    let calls = []
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(init.body)
+      calls.push([body.direction, body.model, body.messages.map((m) => m.content).join("|")].join(":"))
+      // An unscripted call is answered, and caught below by the call count.
+      const decision = answers.shift() ?? ALLOW
+      return { ok: true, status: 200, json: async () => decision }
+    }
+    const opts = { apiKey: "pg_test", scanResponses: true, maxRetries: 0 }
+    const LEAK = "Sure, the customer's SSN is 123-45-6789."
+    const mock = ${mock}
+    const named = (e) => e?.constructor?.name ?? String(e)
+    const prompt = [{ role: "user", content: [{ type: "text", text: "What is the customer's SSN?" }] }]
+
+    async function run(wrap, how, scripted) {
+      answers = [...scripted]
+      calls = []
+      let outcome
+      try {
+        const model = wrap(mock())
+        if (how === "generate") {
+          outcome = { content: (await model.doGenerate({ prompt })).content }
+        } else {
+          const reader = (await model.doStream({ prompt })).stream.getReader()
+          const parts = []
+          try {
+            for (;;) {
+              const { done, value } = await reader.read()
+              if (done) break
+              parts.push(value.type === "error" ? { type: "error", error: named(value.error) } : value)
+            }
+            outcome = { parts }
+          } catch (e) {
+            outcome = { parts, error: named(e) }
+          }
+        }
+      } catch (e) {
+        outcome = { thrown: named(e) }
+      }
+      return { calls, outcome }
+    }
+
+    const viaWrapper = (m) => promptguard(m, opts)
+    const viaMiddleware = (m) => wrapLanguageModel({ model: m, middleware: promptGuardMiddleware(opts) })
+    const cases = [
+      ["generated, allowed", "generate", [ALLOW, ALLOW]],
+      ["generated, input blocked", "generate", [BLOCK]],
+      ["generated, output blocked", "generate", [ALLOW, BLOCK]],
+      ["streamed, allowed", "stream", [ALLOW, ALLOW]],
+      ["streamed, input blocked", "stream", [BLOCK]],
+      ["streamed, output blocked", "stream", [ALLOW, BLOCK]],
+      ["streamed, output redacted", "stream", [ALLOW, REDACT]],
+    ]
+    for (const [label, how, scripted] of cases) {
+      const wrapper = await run(viaWrapper, how, scripted)
+      const middleware = await run(viaMiddleware, how, scripted)
+      if (JSON.stringify(wrapper) !== JSON.stringify(middleware))
+        throw new Error(label + ": wrapper " + JSON.stringify(wrapper) + " but middleware " + JSON.stringify(middleware))
+      if (wrapper.calls.length !== scripted.length) throw new Error(label + ": Guard calls " + wrapper.calls.join())
+    }
+  `
+
+  // ai@7 is ESM-only and this package is CommonJS, so the packed
+  // `promptguard()` is run under the real ai@7 (the `ai-v7` devDependency):
+  // a generated call is scanned both ways with the model's id, and a blocked
+  // stream surfaces as the README says — blocked output throws from
+  // `textStream` without calling `onError`; a blocked prompt goes to
+  // `onError` and `textStream` ends empty. The Guard API is stubbed.
+  const aiV7 = (file) =>
+    JSON.stringify(pathToFileURL(path.join(root, "node_modules", "ai-v7", "dist", file)).href)
+  const aiV7Check = `
+    import { generateText, streamText } from ${aiV7("index.js")}
+    import { MockLanguageModelV4 } from ${aiV7("test/index.js")}
+    import { PromptGuardBlockedError } from "promptguard-sdk"
+    import { promptguard } from "promptguard-sdk/integrations/vercel-ai"
+
+    const answers = ["allow", "allow", "allow", "block", "block"]
+    const seen = []
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(init.body)
+      seen.push(body.direction + ":" + body.model)
+      const decision = answers.shift()
+      return { ok: true, status: 200, json: async () => ({ decision, event_id: "e", confidence: 0.9, threats: [] }) }
+    }
+    const finishReason = { unified: "stop", raw: "stop" }
+    const usage = { inputTokens: { total: 1 }, outputTokens: { total: 1 } }
+    const model = promptguard(
+      new MockLanguageModelV4({
+        doGenerate: { content: [{ type: "text", text: "Hello back." }], finishReason, usage, warnings: [] },
+        doStream: async () => ({
+          stream: new ReadableStream({
+            start(c) {
+              c.enqueue({ type: "text-delta", id: "t", delta: "SSN 123-45-6789" })
+              c.enqueue({ type: "finish", finishReason, usage })
+              c.close()
+            },
+          }),
+        }),
+      }),
+      { apiKey: "pg_test", scanResponses: true, maxRetries: 0 },
+    )
+    if (model.specificationVersion !== "v4") throw new Error("specification version changed")
+
+    const { text } = await generateText({ model, prompt: "Hi" })
+    if (text !== "Hello back.") throw new Error("generateText returned " + JSON.stringify(text))
+
+    async function stream() {
+      const errors = []
+      let delivered = ""
+      let thrown
+      try {
+        const result = streamText({ model, prompt: "Hi", onError: ({ error }) => errors.push(error) })
+        for await (const t of result.textStream) delivered += t
+      } catch (error) {
+        thrown = error
+      }
+      return { errors, delivered, thrown }
+    }
+
+    const output = await stream()
+    if (!(output.thrown instanceof PromptGuardBlockedError) || output.delivered || output.errors.length)
+      throw new Error("blocked output: " + JSON.stringify(output))
+
+    const input = await stream()
+    if (input.thrown || input.delivered || !(input.errors[0] instanceof PromptGuardBlockedError))
+      throw new Error("blocked input: " + JSON.stringify(input))
+
+    const expected = "input,output,input,output,input".split(",").map((d) => d + ":mock-model-id")
+    if (seen.join() !== expected.join()) throw new Error("Guard calls: " + seen.join())
+  `
+  fs.writeFileSync(path.join(appDir, "ai-v7-check.mjs"), aiV7Check)
+  check("promptguard() runs under ai@7 (ESM-only), generated and streamed, blocked both ways", () => {
+    run("node", ["ai-v7-check.mjs"], { cwd: appDir })
+  })
+
+  fs.writeFileSync(
+    path.join(appDir, "ai-v7-equivalence.mjs"),
+    equivalenceCheck({
+      imports: `
+        import { wrapLanguageModel } from ${aiV7("index.js")}
+        import { MockLanguageModelV4 } from ${aiV7("test/index.js")}
+      `,
+      mock: `() => {
+        const finishReason = { unified: "stop", raw: "stop" }
+        const usage = { inputTokens: { total: 1 }, outputTokens: { total: 1 } }
+        return new MockLanguageModelV4({
+          doGenerate: async () => ({ content: [{ type: "text", text: LEAK }], finishReason, usage, warnings: [] }),
+          doStream: async () => ({
+            stream: new ReadableStream({
+              start(c) {
+                c.enqueue({ type: "stream-start", warnings: [] })
+                c.enqueue({ type: "text-start", id: "t" })
+                c.enqueue({ type: "text-delta", id: "t", delta: LEAK })
+                c.enqueue({ type: "text-end", id: "t" })
+                c.enqueue({ type: "finish", finishReason, usage })
+                c.close()
+              },
+            }),
+          }),
+        })
+      }`,
+    }),
+  )
+  check("promptguard() behaves like promptGuardMiddleware under ai@7's wrapLanguageModel (V4)", () => {
+    run("node", ["ai-v7-equivalence.mjs"], { cwd: appDir })
+  })
+
+  // ai@5 drives LanguageModelV2 and cannot be a devDependency here: its
+  // latest release carries open advisories (npm audit). So it is installed
+  // from the registry into its own temp project, pinned, beside the packed
+  // tarball. Before the V2 error-part ending, a blocked streamed output left
+  // ai@5's `await result.text` unsettled forever; every way of reading a
+  // blocked stream must now settle, through the wrapper and through the
+  // middleware under ai@5's own wrapLanguageModel.
+  const ai5Dir = path.join(workDir, "ai5")
+  fs.mkdirSync(ai5Dir)
+  fs.writeFileSync(path.join(ai5Dir, "package.json"), JSON.stringify({ private: true }))
+  const ai5Check = `
+    import { streamText, wrapLanguageModel } from "ai"
+    import { MockLanguageModelV2 } from "ai/test"
+    import { PromptGuardBlockedError } from "promptguard-sdk"
+    import { promptguard, promptGuardMiddleware } from "promptguard-sdk/integrations/vercel-ai"
+
+    let answers = []
+    globalThis.fetch = async () => {
+      const decision = answers.shift() ?? "allow"
+      return { ok: true, status: 200, json: async () => ({ decision, event_id: "e", confidence: 0.9, threats: [] }) }
+    }
+    const opts = { apiKey: "pg_test", scanResponses: true, maxRetries: 0 }
+    const mock = () =>
+      new MockLanguageModelV2({
+        doStream: async () => ({
+          stream: new ReadableStream({
+            start(c) {
+              c.enqueue({ type: "stream-start", warnings: [] })
+              c.enqueue({ type: "text-start", id: "t" })
+              c.enqueue({ type: "text-delta", id: "t", delta: "SSN 123-45-6789" })
+              c.enqueue({ type: "text-end", id: "t" })
+              c.enqueue({ type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } })
+              c.close()
+            },
+          }),
+        }),
+      })
+    const models = {
+      wrapper: () => promptguard(mock(), opts),
+      middleware: () => wrapLanguageModel({ model: mock(), middleware: promptGuardMiddleware(opts) }),
+    }
+    const named = (e) => (e instanceof PromptGuardBlockedError ? "PromptGuardBlockedError" : e?.constructor?.name ?? String(e))
+    const within = (promise, what) =>
+      Promise.race([
+        promise.then((v) => ({ value: v }), (e) => ({ error: named(e) })),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(what + " never settled")), 3000)),
+      ])
+
+    /** Each way of reading one blocked-output stream, from a fresh call. */
+    async function read(model, how) {
+      answers = ["allow", "block"]
+      const errors = []
+      const result = streamText({ model, prompt: "Hi", onError: ({ error }) => errors.push(named(error)) })
+      let text = ""
+      const errorParts = []
+      const outcome = await within(
+        (async () => {
+          if (how === "textStream") for await (const t of result.textStream) text += t
+          if (how === "fullStream")
+            for await (const p of result.fullStream) if (p.type === "error") errorParts.push(named(p.error))
+          if (how === "text") return await result.text
+          if (how === "finishReason") return await result.finishReason
+          if (how === "response") {
+            const response = result.toTextStreamResponse()
+            return response.status + ":" + (await response.text())
+          }
+        })(),
+        how,
+      )
+      await new Promise((r) => setTimeout(r, 20))
+      if (text.includes("123-45-6789")) throw new Error(how + " delivered the secret")
+      return { outcome, errors, errorParts }
+    }
+
+    const report = {}
+    for (const [name, model] of Object.entries(models))
+      for (const how of ["textStream", "fullStream", "text", "finishReason", "response"])
+        report[name + " " + how] = await read(model(), how)
+    // What ai@5 then does, pinned: onError gets the block; fullStream carries
+    // it as an error part; textStream ends without throwing; result.text and
+    // the text response resolve with what was released before the block
+    // (here, nothing); result.finishReason resolves with "error", the signal
+    // the README gives a caller that reads only the text.
+    for (const [k, r] of Object.entries(report)) {
+      const how = k.split(" ")[1]
+      const expected = {
+        errors: ["PromptGuardBlockedError"],
+        errorParts: how === "fullStream" ? ["PromptGuardBlockedError"] : [],
+        outcome:
+          how === "text"
+            ? { value: "" }
+            : how === "finishReason"
+              ? { value: "error" }
+              : how === "response"
+                ? { value: "200:" }
+                : {},
+      }
+      if (JSON.stringify(r) !== JSON.stringify({ outcome: expected.outcome, errors: expected.errors, errorParts: expected.errorParts }))
+        throw new Error(k + ": " + JSON.stringify(r))
+    }
+  `
+  fs.writeFileSync(path.join(ai5Dir, "ai-v5-check.mjs"), ai5Check)
+  check("a blocked stream never hangs under ai@5 (V2), through the wrapper and the middleware", () => {
+    run(
+      "npm",
+      ["install", "--no-audit", "--no-fund", "--no-save", "--ignore-scripts", tarball, "ai@5.0.277", "zod@3.25.76"],
+      { cwd: ai5Dir },
+    )
+    run("node", ["ai-v5-check.mjs"], { cwd: ai5Dir })
+  })
+
+  // Uses the ai@5 install above.
+  fs.writeFileSync(
+    path.join(ai5Dir, "ai-v5-equivalence.mjs"),
+    equivalenceCheck({
+      imports: `
+        import { wrapLanguageModel } from "ai"
+        import { MockLanguageModelV2 } from "ai/test"
+      `,
+      mock: `() => {
+        const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
+        return new MockLanguageModelV2({
+          doGenerate: async () => ({ content: [{ type: "text", text: LEAK }], finishReason: "stop", usage, warnings: [] }),
+          doStream: async () => ({
+            stream: new ReadableStream({
+              start(c) {
+                c.enqueue({ type: "stream-start", warnings: [] })
+                c.enqueue({ type: "text-start", id: "t" })
+                c.enqueue({ type: "text-delta", id: "t", delta: LEAK })
+                c.enqueue({ type: "text-end", id: "t" })
+                c.enqueue({ type: "finish", finishReason: "stop", usage })
+                c.close()
+              },
+            }),
+          }),
+        })
+      }`,
+    }),
+  )
+  check("promptguard() behaves like promptGuardMiddleware under ai@5's wrapLanguageModel (V2)", () => {
+    run("node", ["ai-v5-equivalence.mjs"], { cwd: ai5Dir })
   })
 } finally {
   fs.rmSync(workDir, { recursive: true, force: true })

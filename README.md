@@ -240,32 +240,51 @@ The callback handler provides rich context to PromptGuard - chain names, tool ca
 
 ### Vercel AI SDK
 
+Wrap the model with `promptguard()` and use it wherever you used the original. It wraps the models of `ai` 5, 6 and 7 (specification V2, V3 and V4); on `ai` 4, use `promptGuardMiddleware()` below.
+
 ```typescript
 import { openai } from '@ai-sdk/openai';
-import { wrapLanguageModel, generateText } from 'ai';
+import { generateText, streamText } from 'ai';
+import { promptguard } from 'promptguard-sdk/integrations/vercel-ai';
+
+const model = promptguard(openai('gpt-5-nano'), {
+  apiKey: 'pg_live_xxx', // default: PROMPTGUARD_API_KEY
+  mode: 'enforce',
+  scanResponses: true,
+});
+
+const { text } = await generateText({ model, prompt: 'Hello!' });
+const result = streamText({ model, prompt: 'Hello again!' });
+```
+
+The wrapped model keeps the original's specification version, provider, model id and type, even when the original is frozen. On `ai` 4, or if you already compose AI SDK middleware, `promptGuardMiddleware()` takes the same options and scans the same way:
+
+```typescript
+import { wrapLanguageModel } from 'ai';
 import { promptGuardMiddleware } from 'promptguard-sdk/integrations/vercel-ai';
 
 const model = wrapLanguageModel({
   model: openai('gpt-5-nano'),
-  middleware: promptGuardMiddleware({
-    apiKey: 'pg_live_xxx',
-    mode: 'enforce',
-    scanResponses: true,
-  }),
-});
-
-const { text } = await generateText({
-  model,
-  prompt: 'Hello!',
+  middleware: [promptGuardMiddleware({ scanResponses: true }) /* , ...yours */],
 });
 ```
+
+Input is scanned before every call. In enforce mode a block throws `PromptGuardBlockedError` before the model is called, and a redaction rewrites the prompt the model receives.
 
 With `scanResponses: true`, streamed output (`streamText()`) is scanned as well as generated output, with the same decisions and the same fail-open policy:
 
 - **Enforce mode holds back text until it has been scanned.** Parts that carry scanned text (text deltas, tool-call input) are held. Each time `streamWindowChars` new characters (default `1000`) have arrived, everything held is scanned and, if clean, released — except the last 200 characters, which stay held and are scanned again at the head of the next window. When the model finishes, the complete text is scanned once more before that tail and the `finish` part are released. The guarantee: no text reaches your code before it has been scanned together with at least the 200 characters that follow it, so a secret up to 200 characters long is always seen whole, even across a window boundary. The cost is that text arrives in bursts, each after one Guard API round trip. Set `streamWindowChars: Infinity` to hold the whole response for a single scan at the end.
 - **Parts with nothing to scan are not held for nothing.** Stream start, reasoning, sources, files and metadata are delivered at once when no text is held ahead of them, and queue behind held text otherwise, so the order of parts never changes. Reasoning is not scanned, as it is not with `generateText()`.
 - **The default window is a judgement call**, not an external standard: 1000 characters is about 250 tokens, a few seconds of generation, which is about as long as one Guard API round trip — so scanning a window roughly keeps pace with generating the next. A smaller window gets the first text out sooner and costs more scans.
-- **A block stops the stream** with `PromptGuardBlockedError` (an output `redact` is enforced as a block, as with `generateText()`). Parts already released stay delivered; nothing after the blocked window is. The AI SDK surfaces it the way it surfaces any model stream error — `streamText()`'s `onError` and an `error` part on `fullStream`.
+- **A block stops the stream** with `PromptGuardBlockedError` (an output `redact` is enforced as a block, as with `generateText()`). Parts already released stay delivered; nothing after the blocked window is. `generateText()` rejects with `PromptGuardBlockedError` on any block. How a block reaches a `streamText()` caller depends on where it happened and on the model's AI SDK specification version (checked against ai 5, 6 and 7). Nothing in it hangs:
+
+  | Blocked | `onError` | `textStream` / `fullStream` | `toTextStreamResponse()` | `await result.text` |
+  |---------|-----------|-----------------------------|--------------------------|---------------------|
+  | Prompt, before the model is called (any version) | Called with `PromptGuardBlockedError` | End with no text; `fullStream` carries an `error` part | 200, empty body | Rejects with `NoOutputGeneratedError` |
+  | Output, from a V3 or V4 model (ai 6 and 7) | Not called | Throw `PromptGuardBlockedError` when read | The body errors when read | Rejects with `PromptGuardBlockedError` |
+  | Output, from a V2 model (ai 5) | Called with `PromptGuardBlockedError` | End with the text released before the block; `fullStream` carries an `error` part | 200, body ends with the text released before the block | Resolves with the text released before the block |
+
+  A V2 stream ends with the AI SDK's `error` part rather than erroring, because ai 5 never settles `await result.text` on an errored stream. So on ai 5 the text alone looks like a short answer: if you read only the text, check `await result.finishReason === 'error'`, which is how a blocked stream finishes there (or use `onError` or `fullStream`). The V2 row also applies to a V2 model (a provider package still on V2) under ai 6 or 7, through `promptguard()` and through ai 6's `wrapLanguageModel`, which passes a V2 model through as it is; such a stream loses the throw ai 6 and 7 would otherwise give. ai 7's `wrapLanguageModel` upgrades a V2 model to V4 first, so the middleware there follows the V4 row.
 - **Monitor mode never holds the stream.** Parts pass through as they arrive and the complete text is scanned once at the end.
 - **The final scan sees what `generateText()` would.** The complete text is assembled the same way as a generated result — text first, then each tool call's input — so the same response gets the same decision streamed or not.
 - **If the Guard API becomes unreachable mid-stream**, the held parts are released and the rest of that stream passes unscanned with a warning (`failOpen: true`, the default). With `failOpen: false` the stream stops with the `GuardApiError` instead.
@@ -404,7 +423,7 @@ What to do:
 - **Verify at runtime** with [`verify()`](#confirming-protection-is-actually-live), which makes real calls and reports what came back, or with `getAppliedPatches()` for the patch list alone — and note that a patch being listed proves the CJS build was patched, not that your ESM imports go through it. `init()` also logs a warning when it applies zero patches.
 - **Prefer the ESM-safe APIs**, which don't rely on module patching:
   - LangChain: `PromptGuardCallbackHandler` (`promptguard-sdk/integrations/langchain`)
-  - Vercel AI SDK: `promptGuardMiddleware` (`promptguard-sdk/integrations/vercel-ai`)
+  - Vercel AI SDK: `promptguard(model)` or `promptGuardMiddleware` (`promptguard-sdk/integrations/vercel-ai`)
   - Any framework: explicit `GuardClient.scan()` calls around your LLM invocations
 - Transpiled-to-CJS TypeScript apps (the common `tsc`/`ts-node` default) are **not** affected — their `import`s compile to `require()` and hit the patched modules.
 

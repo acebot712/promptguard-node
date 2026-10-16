@@ -14,6 +14,21 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Added
 
+- **`promptguard(model)` for the Vercel AI SDK**
+  (`promptguard-sdk/integrations/vercel-ai`). Wraps a language model so its
+  calls are scanned exactly as `promptGuardMiddleware` scans them under
+  `wrapLanguageModel`, for `generateText()` and `streamText()` alike, and
+  takes the same options. The wrapped model keeps the original's own
+  specification version, provider, model id and other properties, and its
+  type, so it goes wherever the original went, frozen models included
+  (acebot712/promptguard#976). It does not import `ai`, so it works with
+  ai@7, which is ESM-only, from this CommonJS package. It wraps the models of
+  ai 5, 6 and 7 (specification V2, V3 and V4); given an ai 4 (V1) model it
+  throws a `TypeError` that points at `promptGuardMiddleware`, which still
+  serves ai 4. The `ai` peer range is unchanged.
+- **`promptGuardMiddleware()` no longer needs `apiKey`.** It falls back to
+  `PROMPTGUARD_API_KEY`, as it already did at runtime; only the type required
+  it.
 - **`streamWindowChars` option for the Vercel AI SDK middleware.** How many
   new characters of streamed output enforce mode collects before scanning
   (default `1000`, chosen to balance how long text is held against Guard API
@@ -41,6 +56,32 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Fixed
 
+- **Guard requests from the Vercel AI SDK integration now name the model.**
+  The middleware read the model id from the call options, where the AI SDK
+  never puts it, so every input and output scan reached the Guard API with
+  no model. It now takes the id from the model the AI SDK hands its hooks,
+  for generated and streamed calls, and `promptguard(model)` does the same.
+- **A blocked streamed output no longer hangs ai@5's `await result.text`.**
+  The middleware stopped a blocked stream by erroring it, and ai@5 never
+  settles `result.text` on an errored stream. For a V2 model (the version
+  ai@5 drives) a block, or a fail-closed `GuardApiError`, now ends the stream
+  with the AI SDK's `error` part and closes it: `onError` and `fullStream`
+  get the error, `result.finishReason` resolves `'error'`, and `textStream`,
+  `result.text` and `toTextStreamResponse()` end with the text released
+  before the block. V3 and V4 models (ai@6, ai@7) still error the stream, so
+  reading it throws; a V2 model under ai@6 or ai@7 gets the error part too.
+- **The README now says how a blocked stream reaches `streamText()`**, for
+  each case and specification version. It said `onError` and an `error`
+  part; on ai@6 and ai@7 that holds only for a blocked prompt, since blocked
+  output is thrown from whatever reads the stream and never reaches
+  `onError`.
+- **`promptGuardMiddleware()` now type-checks with the real `ai` types.**
+  Passing it to `wrapLanguageModel` was a TypeScript error on ai@5, ai@6 and
+  ai@7: `transformParams` returned `Record<string, unknown>` where each
+  expects its call options, and ai@6 also requires
+  `specificationVersion: 'v3'` on the middleware. Its hooks are now generic
+  over what they pass through, and it carries `specificationVersion: 'v3'`,
+  which ai@7 accepts and ai@5 ignores. Runtime behaviour is unchanged.
 - **The Vercel AI SDK middleware now scans streamed output.** With
   `scanResponses: true`, `streamText()` output used to reach the application
   unscanned (`wrapStream` only logged the skip), so a streamed secret or PII

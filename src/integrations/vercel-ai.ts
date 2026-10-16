@@ -1,21 +1,33 @@
 /**
- * Vercel AI SDK integration - middleware for `ai` package.
+ * Vercel AI SDK integration for the `ai` package.
  *
- * Works with the Vercel AI SDK's `wrapLanguageModel` API to intercept
- * all model calls with PromptGuard security scanning.
+ * Two ways in, with the same scanning:
  *
- * @example
+ * - `promptguard(model)` wraps a language model of ai 5, 6 or 7
+ *   (specification v2, v3 or v4), and the wrapped model is used wherever the
+ *   original was:
+ *
  * ```ts
  * import { openai } from '@ai-sdk/openai';
- * import { wrapLanguageModel, generateText } from 'ai';
+ * import { generateText } from 'ai';
+ * import { promptguard } from 'promptguard-sdk/integrations/vercel-ai';
+ *
+ * const model = promptguard(openai('gpt-5-nano'), { scanResponses: true });
+ * const { text } = await generateText({ model, prompt: 'Hello!' });
+ * ```
+ *
+ * - `promptGuardMiddleware(options)` is the same scanning as AI SDK
+ *   middleware, for `wrapLanguageModel` — useful alongside other middleware,
+ *   and the way in on ai 4:
+ *
+ * ```ts
+ * import { wrapLanguageModel } from 'ai';
  * import { promptGuardMiddleware } from 'promptguard-sdk/integrations/vercel-ai';
  *
  * const model = wrapLanguageModel({
  *   model: openai('gpt-5-nano'),
  *   middleware: promptGuardMiddleware({ apiKey: 'pg_live_xxx' }),
  * });
- *
- * const { text } = await generateText({ model, prompt: 'Hello!' });
  * ```
  *
  * With `scanResponses: true`, `streamText()` output is scanned too: in
@@ -23,6 +35,10 @@
  * (`streamWindowChars`, default 1000 characters) at a time, and the complete
  * text is scanned before the stream finishes. See `vercel-ai-output.ts` for
  * the full behaviour and its guarantee.
+ *
+ * Neither imports `ai`: the wrapper calls the middleware's hooks the way
+ * `wrapLanguageModel` does, so it works with whichever `ai` the application
+ * has (ai@7 is ESM-only; this package is CommonJS) and loads without one.
  */
 
 import {
@@ -39,6 +55,7 @@ import {
   DEFAULT_STREAM_WINDOW_CHARS,
   extractGeneratedText,
   type OutputScanPolicy,
+  type StreamStop,
   scanOutputStream,
   scanOutputText,
   validateWindowChars,
@@ -48,7 +65,9 @@ import {
 // Options
 // ---------------------------------------------------------------------------
 
-export interface PromptGuardMiddlewareOptions extends GuardClientConfig {
+export interface PromptGuardMiddlewareOptions extends Omit<GuardClientConfig, "apiKey"> {
+  /** PromptGuard API key (default: the `PROMPTGUARD_API_KEY` environment variable). */
+  apiKey?: string
   mode?: "enforce" | "monitor"
   /**
    * Scan the model's output as well as its input (default: `false`). Applies
@@ -84,9 +103,11 @@ export interface PromptGuardMiddlewareOptions extends GuardClientConfig {
  *
  * Returns an object conforming to the Vercel AI SDK `LanguageModelMiddleware`
  * interface (`transformParams`, plus `wrapGenerate` and `wrapStream` when
- * `scanResponses` is set).
+ * `scanResponses` is set). The hooks are generic over the call options and
+ * results they pass through, so the object is assignable to the middleware
+ * type of each supported `ai` major (checked by `tests/vercel-ai-types.test.ts`).
  */
-export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
+export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions = {}) {
   if (options.silent) setLogLevel("silent")
   else if (options.logLevel) setLogLevel(options.logLevel)
 
@@ -111,24 +132,32 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
 
   return {
     /**
+     * The middleware specification version. ai@6 requires `"v3"` here;
+     * ai@7 accepts any version string, and ai@5 does not read it. The hooks
+     * themselves read every call shape from V2 to V4.
+     */
+    specificationVersion: "v3" as const,
+
+    /**
      * transformParams - scans the input messages before they reach the model.
      */
-    transformParams: async ({ params }: { params: Record<string, unknown> }) => {
-      const prompt = params?.prompt
+    transformParams: async <P extends object>({
+      params,
+      model,
+    }: {
+      params: P
+      model?: ModelIdentity
+    }): Promise<P> => {
+      const prompt = (params as { prompt?: unknown } | undefined)?.prompt
       if (!prompt) return params
 
       const { messages: guardMessages, indices } = vercelPromptToGuardMessages(prompt)
       if (!guardMessages.length) return params
 
       try {
-        const decision = await guard.scan(
-          guardMessages,
-          "input",
-          (params?.modelId as string) ?? undefined,
-          {
-            framework: "vercel-ai-sdk",
-          },
-        )
+        const decision = await guard.scan(guardMessages, "input", modelIdOf(model, params), {
+          framework: "vercel-ai-sdk",
+        })
 
         if (decision.blocked) {
           if (mode === "enforce") throw new PromptGuardBlockedError(decision)
@@ -160,7 +189,7 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
             return {
               ...params,
               prompt: applyRedactionToPrompt(prompt, redactedMessages, indices),
-            }
+            } as P
           }
           logger.warn(
             `[monitor] would redact: content passed through unredacted` +
@@ -188,19 +217,21 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
      * wrapGenerate - optionally scans the model's response.
      */
     wrapGenerate: scanResponses
-      ? async ({
+      ? async <R>({
           doGenerate,
           params,
+          model,
         }: {
-          doGenerate: () => Promise<unknown>
-          params: Record<string, unknown>
-        }) => {
+          doGenerate: () => PromiseLike<R>
+          params?: object
+          model?: ModelIdentity
+        }): Promise<R> => {
           const result = await doGenerate()
 
           const text = extractGeneratedText(result as Record<string, unknown>)
           if (!text) return result
 
-          await scanOutputText(text, outputPolicy, modelIdOf(params))
+          await scanOutputText(text, outputPolicy, modelIdOf(model, params))
           return result
         }
       : undefined,
@@ -211,13 +242,15 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
      * fail-open policy as wrapGenerate (see `vercel-ai-output.ts`).
      */
     wrapStream: scanResponses
-      ? async ({
+      ? async <R>({
           doStream,
           params,
+          model,
         }: {
-          doStream: () => Promise<unknown>
-          params?: Record<string, unknown>
-        }) => {
+          doStream: () => PromiseLike<R>
+          params?: object
+          model?: ModelIdentity
+        }): Promise<R> => {
           const result = await doStream()
           const stream = (result as { stream?: unknown } | null)?.stream
           // Duck-typed: a stream from another realm or polyfill is still a stream.
@@ -228,20 +261,179 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions) {
             return result
           }
           return {
-            ...(result as Record<string, unknown>),
-            stream: scanOutputStream(stream as ReadableStream, outputPolicy, modelIdOf(params)),
-          }
+            ...(result as object),
+            stream: scanOutputStream(
+              stream as ReadableStream,
+              outputPolicy,
+              modelIdOf(model, params),
+              streamStopFor(model),
+            ),
+          } as R
         }
       : undefined,
   }
 }
 
 // ---------------------------------------------------------------------------
+// Model wrapper
+// ---------------------------------------------------------------------------
+
+/**
+ * What every AI SDK language model specification (V1 to V4) has in common,
+ * which is all `promptguard()` relies on.
+ */
+export interface LanguageModelLike {
+  readonly specificationVersion: string
+  readonly modelId: string
+  doGenerate(options: never): PromiseLike<unknown>
+  doStream(options: never): PromiseLike<unknown>
+}
+
+/**
+ * Wrap an AI SDK language model so every call it makes is scanned by
+ * PromptGuard, exactly as `promptGuardMiddleware(options)` would scan it
+ * under `wrapLanguageModel` — generated and streamed alike.
+ *
+ * The wrapped model is the model it wraps in every other respect: its own
+ * specification version, provider, model id, supported URLs and any other
+ * property, so it is accepted wherever the original was and has the same
+ * type. Options are the middleware's; the API key defaults to
+ * `PROMPTGUARD_API_KEY`, and a missing one throws here rather than on the
+ * first call.
+ *
+ * @example
+ * ```ts
+ * const model = promptguard(openai('gpt-5-nano'), { scanResponses: true });
+ * const result = streamText({ model, prompt: 'Hello!' });
+ * ```
+ */
+export function promptguard<M extends LanguageModelLike>(
+  model: M,
+  options: PromptGuardMiddlewareOptions = {},
+): M {
+  if (!isLanguageModel(model)) {
+    throw new TypeError(
+      "promptguard() takes an AI SDK language model object, e.g. promptguard(openai('gpt-5-nano'))" +
+        (typeof model === "string" ? `, not a model id ("${model}")` : ""),
+    )
+  }
+  if (model.specificationVersion === "v1") {
+    throw new TypeError(
+      "promptguard() wraps AI SDK language models of specification v2, v3 and v4 (ai 5, 6 and 7); " +
+        "this model is v1 (ai 4). On ai 4, use promptGuardMiddleware() with ai's wrapLanguageModel.",
+    )
+  }
+  const middleware = promptGuardMiddleware(options)
+
+  // The same composition `wrapLanguageModel` performs: transform the call's
+  // options, then let the wrap hook run the model with them.
+  const call = async (type: "generate" | "stream", params: object): Promise<unknown> => {
+    const transformed = await middleware.transformParams({ params, model })
+    const doGenerate = () => model.doGenerate(transformed as never)
+    const doStream = () => model.doStream(transformed as never)
+    if (type === "generate") {
+      return middleware.wrapGenerate
+        ? middleware.wrapGenerate({ doGenerate, params: transformed, model })
+        : doGenerate()
+    }
+    return middleware.wrapStream
+      ? middleware.wrapStream({ doStream, params: transformed, model })
+      : doStream()
+  }
+  const doGenerate = (params: object) => call("generate", params)
+  const doStream = (params: object) => call("stream", params)
+
+  // A proxy rather than a copy, so getters, methods and fields of any
+  // specification version — including ones not yet written — behave as on
+  // the original. Everything is read from the model itself, so getters and
+  // methods that use its private state keep working.
+  //
+  // The proxy's target is an empty stand-in, not the model: a proxy must
+  // return a target's own read-only, non-configurable properties unchanged,
+  // so a frozen model as the target could not have its `doGenerate` and
+  // `doStream` replaced. Every trap answers from the model instead.
+  const replaced: Record<PropertyKey, unknown> = { doGenerate, doStream }
+  const isReplaced = (property: PropertyKey) => property === "doGenerate" || property === "doStream"
+  return new Proxy(Object.create(null) as M, {
+    get(_, property) {
+      if (isReplaced(property)) return replaced[property]
+      const value = Reflect.get(model, property, model)
+      return typeof value === "function" ? value.bind(model) : value
+    },
+    set: (_, property, value) => Reflect.set(model, property, value, model),
+    has: (_, property) => Reflect.has(model, property),
+    ownKeys: () => Reflect.ownKeys(model),
+    getOwnPropertyDescriptor(_, property) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(model, property)
+      if (!descriptor) return undefined
+      // Reported configurable, since the stand-in does not have it.
+      const own: PropertyDescriptor = { ...descriptor, configurable: true }
+      if (isReplaced(property) && "value" in own) own.value = replaced[property]
+      return own
+    },
+    getPrototypeOf: () => Reflect.getPrototypeOf(model),
+  })
+}
+
+function isLanguageModel(value: unknown): value is LanguageModelLike {
+  if (!value || typeof value !== "object") return false
+  const model = value as Record<string, unknown>
+  return (
+    typeof model.specificationVersion === "string" &&
+    typeof model.doGenerate === "function" &&
+    typeof model.doStream === "function"
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function modelIdOf(params: Record<string, unknown> | undefined): string | undefined {
-  return typeof params?.modelId === "string" ? params.modelId : undefined
+/** What the hooks read from the model `wrapLanguageModel` hands them. */
+interface ModelIdentity {
+  readonly specificationVersion?: unknown
+  readonly modelId?: unknown
+}
+
+/**
+ * How a stream PromptGuard stops ends, by the specification version of the
+ * model being streamed.
+ *
+ * A V2 model is the one ai@5 drives, and ai@5 settles `await result.text`
+ * only when a stream finishes or reports an `error` part: if the stream
+ * itself errors, that promise never settles. So a V2 stream ends with an
+ * `error` part carrying the error, which ai@5 hands to `onError` and to
+ * `fullStream`. Every other version keeps erroring the stream, which ai@6
+ * and ai@7 throw from whatever reads it — `textStream` included, so a
+ * caller that reads only text cannot mistake a blocked answer for a short
+ * one. The version is the only signal available: this package never
+ * imports `ai`, so it cannot ask which `ai` is calling.
+ *
+ * A known trade-off: ai@6 and ai@7 also accept V2 models (a provider package
+ * still on V2), and both would have thrown an errored stream from
+ * `textStream` without hanging. Those callers get the error part instead and
+ * lose the throw: `onError`, `fullStream` and `finishReason === 'error'` are
+ * what tell them. Erroring the stream after the error part does not help,
+ * since ai@5 then hangs again.
+ */
+function streamStopFor(model: ModelIdentity | undefined): StreamStop {
+  // V2 is also what ai@6/ai@7 drive for a V2 provider model: see above.
+  return model?.specificationVersion === "v2" ? "error-part" : "error"
+}
+
+/**
+ * The model id a Guard request reports. The AI SDK puts it on the model the
+ * hooks receive, never in the call options; `params.modelId` is read only
+ * when no model is passed, as when a hook is called directly.
+ */
+function modelIdOf(
+  model: ModelIdentity | undefined,
+  params: object | undefined,
+): string | undefined {
+  for (const id of [model?.modelId, (params as { modelId?: unknown } | undefined)?.modelId]) {
+    if (typeof id === "string" && id) return id
+  }
+  return undefined
 }
 
 /**

@@ -67,7 +67,7 @@ export {
 } from "./guard"
 // Framework integrations (re-exported for convenience)
 export { PromptGuardCallbackHandler } from "./integrations/langchain"
-export { promptGuardMiddleware } from "./integrations/vercel-ai"
+export { promptGuardMiddleware, promptguard } from "./integrations/vercel-ai"
 // Logging controls
 export { getLogLevel, type LogLevel, setLogLevel } from "./logger"
 // Integration self-check
