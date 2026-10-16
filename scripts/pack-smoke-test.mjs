@@ -173,6 +173,82 @@ try {
     run(process.execPath, [tscBin, "-p", "tsconfig.types-check.json"], { cwd: appDir })
   })
 
+  // `promptguard(model)` must behave exactly like `promptGuardMiddleware`
+  // under the AI SDK's own `wrapLanguageModel`. The same script runs under
+  // ai@5 with a V2 model and under ai@7 with a V4 model: each call, generated
+  // and streamed, allowed, blocked either way and redacted, must make the
+  // same Guard requests and give the caller the same result through both.
+  // `imports` provides `wrapLanguageModel`; `mock` is a model factory.
+  const equivalenceCheck = ({ imports, mock }) => `
+    ${imports}
+    import { promptguard, promptGuardMiddleware } from "promptguard-sdk/integrations/vercel-ai"
+
+    const ALLOW = { decision: "allow", event_id: "e", confidence: 0, threats: [] }
+    const BLOCK = { decision: "block", event_id: "e", confidence: 0.9, threat_type: "pii", threats: [] }
+    const REDACT = { decision: "redact", event_id: "e", confidence: 0.8, redacted_messages: [{ role: "assistant", content: "[REDACTED]" }], threats: [] }
+    let answers = []
+    let calls = []
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(init.body)
+      calls.push([body.direction, body.model, body.messages.map((m) => m.content).join("|")].join(":"))
+      // An unscripted call is answered, and caught below by the call count.
+      const decision = answers.shift() ?? ALLOW
+      return { ok: true, status: 200, json: async () => decision }
+    }
+    const opts = { apiKey: "pg_test", scanResponses: true, maxRetries: 0 }
+    const LEAK = "Sure, the customer's SSN is 123-45-6789."
+    const mock = ${mock}
+    const named = (e) => e?.constructor?.name ?? String(e)
+    const prompt = [{ role: "user", content: [{ type: "text", text: "What is the customer's SSN?" }] }]
+
+    async function run(wrap, how, scripted) {
+      answers = [...scripted]
+      calls = []
+      let outcome
+      try {
+        const model = wrap(mock())
+        if (how === "generate") {
+          outcome = { content: (await model.doGenerate({ prompt })).content }
+        } else {
+          const reader = (await model.doStream({ prompt })).stream.getReader()
+          const parts = []
+          try {
+            for (;;) {
+              const { done, value } = await reader.read()
+              if (done) break
+              parts.push(value.type === "error" ? { type: "error", error: named(value.error) } : value)
+            }
+            outcome = { parts }
+          } catch (e) {
+            outcome = { parts, error: named(e) }
+          }
+        }
+      } catch (e) {
+        outcome = { thrown: named(e) }
+      }
+      return { calls, outcome }
+    }
+
+    const viaWrapper = (m) => promptguard(m, opts)
+    const viaMiddleware = (m) => wrapLanguageModel({ model: m, middleware: promptGuardMiddleware(opts) })
+    const cases = [
+      ["generated, allowed", "generate", [ALLOW, ALLOW]],
+      ["generated, input blocked", "generate", [BLOCK]],
+      ["generated, output blocked", "generate", [ALLOW, BLOCK]],
+      ["streamed, allowed", "stream", [ALLOW, ALLOW]],
+      ["streamed, input blocked", "stream", [BLOCK]],
+      ["streamed, output blocked", "stream", [ALLOW, BLOCK]],
+      ["streamed, output redacted", "stream", [ALLOW, REDACT]],
+    ]
+    for (const [label, how, scripted] of cases) {
+      const wrapper = await run(viaWrapper, how, scripted)
+      const middleware = await run(viaMiddleware, how, scripted)
+      if (JSON.stringify(wrapper) !== JSON.stringify(middleware))
+        throw new Error(label + ": wrapper " + JSON.stringify(wrapper) + " but middleware " + JSON.stringify(middleware))
+      if (wrapper.calls.length !== scripted.length) throw new Error(label + ": Guard calls " + wrapper.calls.join())
+    }
+  `
+
   // ai@7 is ESM-only and this package is CommonJS, so the packed
   // `promptguard()` is run under the real ai@7 (the `ai-v7` devDependency):
   // a generated call is scanned both ways with the model's id, and a blocked
@@ -244,6 +320,38 @@ try {
   fs.writeFileSync(path.join(appDir, "ai-v7-check.mjs"), aiV7Check)
   check("promptguard() runs under ai@7 (ESM-only), generated and streamed, blocked both ways", () => {
     run("node", ["ai-v7-check.mjs"], { cwd: appDir })
+  })
+
+  fs.writeFileSync(
+    path.join(appDir, "ai-v7-equivalence.mjs"),
+    equivalenceCheck({
+      imports: `
+        import { wrapLanguageModel } from ${aiV7("index.js")}
+        import { MockLanguageModelV4 } from ${aiV7("test/index.js")}
+      `,
+      mock: `() => {
+        const finishReason = { unified: "stop", raw: "stop" }
+        const usage = { inputTokens: { total: 1 }, outputTokens: { total: 1 } }
+        return new MockLanguageModelV4({
+          doGenerate: async () => ({ content: [{ type: "text", text: LEAK }], finishReason, usage, warnings: [] }),
+          doStream: async () => ({
+            stream: new ReadableStream({
+              start(c) {
+                c.enqueue({ type: "stream-start", warnings: [] })
+                c.enqueue({ type: "text-start", id: "t" })
+                c.enqueue({ type: "text-delta", id: "t", delta: LEAK })
+                c.enqueue({ type: "text-end", id: "t" })
+                c.enqueue({ type: "finish", finishReason, usage })
+                c.close()
+              },
+            }),
+          }),
+        })
+      }`,
+    }),
+  )
+  check("promptguard() behaves like promptGuardMiddleware under ai@7's wrapLanguageModel (V4)", () => {
+    run("node", ["ai-v7-equivalence.mjs"], { cwd: appDir })
   })
 
   // ai@5 drives LanguageModelV2 and cannot be a devDependency here: its
@@ -346,6 +454,38 @@ try {
       { cwd: ai5Dir },
     )
     run("node", ["ai-v5-check.mjs"], { cwd: ai5Dir })
+  })
+
+  // Uses the ai@5 install above.
+  fs.writeFileSync(
+    path.join(ai5Dir, "ai-v5-equivalence.mjs"),
+    equivalenceCheck({
+      imports: `
+        import { wrapLanguageModel } from "ai"
+        import { MockLanguageModelV2 } from "ai/test"
+      `,
+      mock: `() => {
+        const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 }
+        return new MockLanguageModelV2({
+          doGenerate: async () => ({ content: [{ type: "text", text: LEAK }], finishReason: "stop", usage, warnings: [] }),
+          doStream: async () => ({
+            stream: new ReadableStream({
+              start(c) {
+                c.enqueue({ type: "stream-start", warnings: [] })
+                c.enqueue({ type: "text-start", id: "t" })
+                c.enqueue({ type: "text-delta", id: "t", delta: LEAK })
+                c.enqueue({ type: "text-end", id: "t" })
+                c.enqueue({ type: "finish", finishReason: "stop", usage })
+                c.close()
+              },
+            }),
+          }),
+        })
+      }`,
+    }),
+  )
+  check("promptguard() behaves like promptGuardMiddleware under ai@5's wrapLanguageModel (V2)", () => {
+    run("node", ["ai-v5-equivalence.mjs"], { cwd: ai5Dir })
   })
 } finally {
   fs.rmSync(workDir, { recursive: true, force: true })

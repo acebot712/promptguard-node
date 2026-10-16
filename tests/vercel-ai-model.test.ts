@@ -321,6 +321,82 @@ describe("promptguard(model)", () => {
     expect(wrapped).toBeInstanceOf(MockLanguageModelV3)
   })
 
+  describe("a model that cannot be modified", () => {
+    test("a frozen model is wrapped, keeps its properties and is scanned", async () => {
+      const model = Object.freeze(fakeModel("v3"))
+      const wrapped = promptguard(model, OPTS)
+      expect(wrapped.specificationVersion).toBe("v3")
+      expect(wrapped.provider).toBe("fake.chat")
+      expect(wrapped.modelId).toBe("gpt-5-nano")
+      expect(wrapped.supportedUrls).toBe(model.supportedUrls)
+
+      const fetchMock = guardFetchSequence(ALLOW, BLOCK)
+      global.fetch = fetchMock
+      await expect(wrapped.doGenerate({ prompt: PROMPT })).rejects.toBeInstanceOf(
+        PromptGuardBlockedError,
+      )
+      expect(guardBodies(fetchMock)).toEqual([
+        { direction: "input", content: "What is the customer's SSN?" },
+        { direction: "output", content: LEAKED_TEXT },
+      ])
+    })
+
+    test("a frozen class-based model stays an instance of its class, its getters forward, and generateText accepts it", async () => {
+      const model = Object.freeze(
+        new MockLanguageModelV3({
+          supportedUrls: { "image/*": [/^https:/] },
+          doGenerate: {
+            content: [{ type: "text", text: "Hello back." }],
+            finishReason: { unified: "stop", raw: "stop" },
+            usage: {
+              inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+              outputTokens: { total: 2, text: 2, reasoning: 0 },
+            },
+            warnings: [],
+          },
+        }),
+      )
+      const wrapped = promptguard(model, OPTS)
+      expect(wrapped).toBeInstanceOf(MockLanguageModelV3)
+      expect(Object.getPrototypeOf(wrapped)).toBe(MockLanguageModelV3.prototype)
+      expect(await wrapped.supportedUrls).toEqual({ "image/*": [/^https:/] })
+
+      global.fetch = guardFetchSequence(ALLOW, ALLOW)
+      const { text } = await generateText({ model: wrapped, prompt: "Hello!" })
+      expect(text).toBe("Hello back.")
+    })
+
+    test("supportedUrls given as a promise is the model's own promise", () => {
+      const supportedUrls = Promise.resolve({ "image/*": [/^https:\/\//] })
+      const model = Object.freeze({ ...fakeModel("v3"), supportedUrls })
+      expect(promptguard(model, OPTS).supportedUrls).toBe(supportedUrls)
+    })
+
+    test("its own properties still spread and enumerate as the model's", () => {
+      const model = Object.freeze(fakeModel("v4"))
+      const wrapped = promptguard(model, OPTS)
+      expect(Object.keys(wrapped)).toEqual(Object.keys(model))
+      expect("supportedUrls" in wrapped).toBe(true)
+      const copy = { ...wrapped }
+      expect(copy.modelId).toBe("gpt-5-nano")
+      expect(copy.doGenerate).toBe(wrapped.doGenerate)
+    })
+  })
+
+  test("refuses a specification-v1 (ai 4) model with a TypeError naming the supported versions and the ai 4 integration", () => {
+    const v1 = { ...fakeModel("v4"), specificationVersion: "v1" }
+    let thrown: unknown
+    try {
+      promptguard(v1, OPTS)
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(TypeError)
+    const message = (thrown as TypeError).message
+    for (const named of ["v1", "v2", "v3", "v4", "promptGuardMiddleware", "wrapLanguageModel"])
+      expect(message).toContain(named)
+  })
+
   test("is exported from the package root too", () => {
     expect(sdk.promptguard).toBe(promptguard)
   })
