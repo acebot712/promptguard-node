@@ -1,6 +1,6 @@
 /**
  * The Vercel AI SDK integration type-checks against the real `ai` types of
- * every major the `ai` peer range declares.
+ * every major `promptguard()` supports (ai 5, 6 and 7).
  *
  * ts-jest type-checks this file when the suite runs, so a middleware or a
  * wrapped model that one of those majors would reject fails the suite. The

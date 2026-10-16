@@ -240,7 +240,7 @@ The callback handler provides rich context to PromptGuard - chain names, tool ca
 
 ### Vercel AI SDK
 
-Supports `ai` 5, 6 and 7. Wrap the model with `promptguard()` and use it wherever you used the original:
+Wrap the model with `promptguard()` and use it wherever you used the original. It wraps the models of `ai` 5, 6 and 7 (specification V2, V3 and V4); on `ai` 4, use `promptGuardMiddleware()` below.
 
 ```typescript
 import { openai } from '@ai-sdk/openai';
@@ -257,7 +257,7 @@ const { text } = await generateText({ model, prompt: 'Hello!' });
 const result = streamText({ model, prompt: 'Hello again!' });
 ```
 
-The wrapped model keeps the original's specification version, provider, model id and type. If you already compose AI SDK middleware, `promptGuardMiddleware()` takes the same options and scans the same way:
+The wrapped model keeps the original's specification version, provider, model id and type, even when the original is frozen. On `ai` 4, or if you already compose AI SDK middleware, `promptGuardMiddleware()` takes the same options and scans the same way:
 
 ```typescript
 import { wrapLanguageModel } from 'ai';
@@ -284,7 +284,7 @@ With `scanResponses: true`, streamed output (`streamText()`) is scanned as well 
   | Output, from a V3 or V4 model (ai 6 and 7) | Not called | Throw `PromptGuardBlockedError` when read | The body errors when read | Rejects with `PromptGuardBlockedError` |
   | Output, from a V2 model (ai 5) | Called with `PromptGuardBlockedError` | End with the text released before the block; `fullStream` carries an `error` part | 200, body ends with the text released before the block | Resolves with the text released before the block |
 
-  A V2 stream ends with the AI SDK's `error` part rather than erroring, because ai 5 never settles `await result.text` on an errored stream. So on ai 5, check `onError` (or `fullStream`) for the block: the text alone looks like a short answer. The V2 row also applies to a V2 model given to `promptguard()` under ai 6 or 7; ai 7's `wrapLanguageModel` upgrades a V2 model to V4 first, so the middleware there follows the V4 row.
+  A V2 stream ends with the AI SDK's `error` part rather than erroring, because ai 5 never settles `await result.text` on an errored stream. So on ai 5 the text alone looks like a short answer: if you read only the text, check `await result.finishReason === 'error'`, which is how a blocked stream finishes there (or use `onError` or `fullStream`). The V2 row also applies to a V2 model (a provider package still on V2) under ai 6 or 7, through `promptguard()` and through ai 6's `wrapLanguageModel`, which passes a V2 model through as it is; such a stream loses the throw ai 6 and 7 would otherwise give. ai 7's `wrapLanguageModel` upgrades a V2 model to V4 first, so the middleware there follows the V4 row.
 - **Monitor mode never holds the stream.** Parts pass through as they arrive and the complete text is scanned once at the end.
 - **The final scan sees what `generateText()` would.** The complete text is assembled the same way as a generated result — text first, then each tool call's input — so the same response gets the same decision streamed or not.
 - **If the Guard API becomes unreachable mid-stream**, the held parts are released and the rest of that stream passes unscanned with a warning (`failOpen: true`, the default). With `failOpen: false` the stream stops with the `GuardApiError` instead.

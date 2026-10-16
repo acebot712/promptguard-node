@@ -20,9 +20,12 @@ survives three releases is a changelog nobody is maintaining.
   `wrapLanguageModel`, for `generateText()` and `streamText()` alike, and
   takes the same options. The wrapped model keeps the original's own
   specification version, provider, model id and other properties, and its
-  type, so it goes wherever the original went
+  type, so it goes wherever the original went, frozen models included
   (acebot712/promptguard#976). It does not import `ai`, so it works with
-  ai@7, which is ESM-only, from this CommonJS package.
+  ai@7, which is ESM-only, from this CommonJS package. It wraps the models of
+  ai 5, 6 and 7 (specification V2, V3 and V4); given an ai 4 (V1) model it
+  throws a `TypeError` that points at `promptGuardMiddleware`, which still
+  serves ai 4. The `ai` peer range is unchanged.
 - **`promptGuardMiddleware()` no longer needs `apiKey`.** It falls back to
   `PROMPTGUARD_API_KEY`, as it already did at runtime; only the type required
   it.
@@ -34,13 +37,6 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Changed
 
-- **The `ai` peer range is now `^5.0.0 || ^6.0.0 || ^7.0.0`** (was
-  `>=3.0.0`). Those are the majors the Vercel AI SDK integration is
-  type-checked against in this repo's tests. Most ai@3 releases had no
-  middleware at all, and ai@4 has had no release since 4.3.19 (July 2025)
-  while its dependency tree carries open advisories with no 4.x fix, so
-  neither is tested here. The code that reads AI SDK 4 (LanguageModelV1)
-  calls is unchanged.
 - **Streamed output from the Vercel AI SDK middleware is now delivered after
   it is scanned.** With `scanResponses: true` in enforce mode, text arrives in
   bursts, each after one Guard API round trip, instead of token by token: each
@@ -66,9 +62,10 @@ survives three releases is a changelog nobody is maintaining.
   settles `result.text` on an errored stream. For a V2 model (the version
   ai@5 drives) a block, or a fail-closed `GuardApiError`, now ends the stream
   with the AI SDK's `error` part and closes it: `onError` and `fullStream`
-  get the error, and `textStream`, `result.text` and `toTextStreamResponse()`
-  end with the text released before the block. V3 and V4 models (ai@6,
-  ai@7) still error the stream, so reading it throws.
+  get the error, `result.finishReason` resolves `'error'`, and `textStream`,
+  `result.text` and `toTextStreamResponse()` end with the text released
+  before the block. V3 and V4 models (ai@6, ai@7) still error the stream, so
+  reading it throws; a V2 model under ai@6 or ai@7 gets the error part too.
 - **The README now says how a blocked stream reaches `streamText()`**, for
   each case and specification version. It said `onError` and an `error`
   part; on ai@6 and ai@7 that holds only for a blocked prompt, since blocked

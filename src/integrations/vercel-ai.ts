@@ -1,10 +1,11 @@
 /**
- * Vercel AI SDK integration for the `ai` package (AI SDK 5, 6 and 7).
+ * Vercel AI SDK integration for the `ai` package.
  *
  * Two ways in, with the same scanning:
  *
- * - `promptguard(model)` wraps a language model, and the wrapped model is
- *   used wherever the original was:
+ * - `promptguard(model)` wraps a language model of ai 5, 6 or 7
+ *   (specification v2, v3 or v4), and the wrapped model is used wherever the
+ *   original was:
  *
  * ```ts
  * import { openai } from '@ai-sdk/openai';
@@ -16,7 +17,8 @@
  * ```
  *
  * - `promptGuardMiddleware(options)` is the same scanning as AI SDK
- *   middleware, for `wrapLanguageModel` — useful alongside other middleware:
+ *   middleware, for `wrapLanguageModel` — useful alongside other middleware,
+ *   and the way in on ai 4:
  *
  * ```ts
  * import { wrapLanguageModel } from 'ai';
@@ -315,6 +317,12 @@ export function promptguard<M extends LanguageModelLike>(
         (typeof model === "string" ? `, not a model id ("${model}")` : ""),
     )
   }
+  if (model.specificationVersion === "v1") {
+    throw new TypeError(
+      "promptguard() wraps AI SDK language models of specification v2, v3 and v4 (ai 5, 6 and 7); " +
+        "this model is v1 (ai 4). On ai 4, use promptGuardMiddleware() with ai's wrapLanguageModel.",
+    )
+  }
   const middleware = promptGuardMiddleware(options)
 
   // The same composition `wrapLanguageModel` performs: transform the call's
@@ -339,13 +347,31 @@ export function promptguard<M extends LanguageModelLike>(
   // specification version — including ones not yet written — behave as on
   // the original. Everything is read from the model itself, so getters and
   // methods that use its private state keep working.
-  return new Proxy(model, {
-    get(target, property) {
-      if (property === "doGenerate") return doGenerate
-      if (property === "doStream") return doStream
-      const value = Reflect.get(target, property, target)
-      return typeof value === "function" ? value.bind(target) : value
+  //
+  // The proxy's target is an empty stand-in, not the model: a proxy must
+  // return a target's own read-only, non-configurable properties unchanged,
+  // so a frozen model as the target could not have its `doGenerate` and
+  // `doStream` replaced. Every trap answers from the model instead.
+  const replaced: Record<PropertyKey, unknown> = { doGenerate, doStream }
+  const isReplaced = (property: PropertyKey) => property === "doGenerate" || property === "doStream"
+  return new Proxy(Object.create(null) as M, {
+    get(_, property) {
+      if (isReplaced(property)) return replaced[property]
+      const value = Reflect.get(model, property, model)
+      return typeof value === "function" ? value.bind(model) : value
     },
+    set: (_, property, value) => Reflect.set(model, property, value, model),
+    has: (_, property) => Reflect.has(model, property),
+    ownKeys: () => Reflect.ownKeys(model),
+    getOwnPropertyDescriptor(_, property) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(model, property)
+      if (!descriptor) return undefined
+      // Reported configurable, since the stand-in does not have it.
+      const own: PropertyDescriptor = { ...descriptor, configurable: true }
+      if (isReplaced(property) && "value" in own) own.value = replaced[property]
+      return own
+    },
+    getPrototypeOf: () => Reflect.getPrototypeOf(model),
   })
 }
 
@@ -382,8 +408,16 @@ interface ModelIdentity {
  * caller that reads only text cannot mistake a blocked answer for a short
  * one. The version is the only signal available: this package never
  * imports `ai`, so it cannot ask which `ai` is calling.
+ *
+ * A known trade-off: ai@6 and ai@7 also accept V2 models (a provider package
+ * still on V2), and both would have thrown an errored stream from
+ * `textStream` without hanging. Those callers get the error part instead and
+ * lose the throw: `onError`, `fullStream` and `finishReason === 'error'` are
+ * what tell them. Erroring the stream after the error part does not help,
+ * since ai@5 then hangs again.
  */
 function streamStopFor(model: ModelIdentity | undefined): StreamStop {
+  // V2 is also what ai@6/ai@7 drive for a V2 provider model: see above.
   return model?.specificationVersion === "v2" ? "error-part" : "error"
 }
 
