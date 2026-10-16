@@ -138,7 +138,13 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions = {}
     /**
      * transformParams - scans the input messages before they reach the model.
      */
-    transformParams: async <P extends object>({ params }: { params: P }): Promise<P> => {
+    transformParams: async <P extends object>({
+      params,
+      model,
+    }: {
+      params: P
+      model?: ModelIdentity
+    }): Promise<P> => {
       const prompt = (params as { prompt?: unknown } | undefined)?.prompt
       if (!prompt) return params
 
@@ -146,7 +152,7 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions = {}
       if (!guardMessages.length) return params
 
       try {
-        const decision = await guard.scan(guardMessages, "input", modelIdOf(params), {
+        const decision = await guard.scan(guardMessages, "input", modelIdOf(model, params), {
           framework: "vercel-ai-sdk",
         })
 
@@ -211,16 +217,18 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions = {}
       ? async <R>({
           doGenerate,
           params,
+          model,
         }: {
           doGenerate: () => PromiseLike<R>
           params?: object
+          model?: ModelIdentity
         }): Promise<R> => {
           const result = await doGenerate()
 
           const text = extractGeneratedText(result as Record<string, unknown>)
           if (!text) return result
 
-          await scanOutputText(text, outputPolicy, modelIdOf(params))
+          await scanOutputText(text, outputPolicy, modelIdOf(model, params))
           return result
         }
       : undefined,
@@ -234,9 +242,11 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions = {}
       ? async <R>({
           doStream,
           params,
+          model,
         }: {
           doStream: () => PromiseLike<R>
           params?: object
+          model?: ModelIdentity
         }): Promise<R> => {
           const result = await doStream()
           const stream = (result as { stream?: unknown } | null)?.stream
@@ -249,7 +259,11 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions = {}
           }
           return {
             ...(result as object),
-            stream: scanOutputStream(stream as ReadableStream, outputPolicy, modelIdOf(params)),
+            stream: scanOutputStream(
+              stream as ReadableStream,
+              outputPolicy,
+              modelIdOf(model, params),
+            ),
           } as R
         }
       : undefined,
@@ -266,6 +280,7 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions = {}
  */
 export interface LanguageModelLike {
   readonly specificationVersion: string
+  readonly modelId: string
   doGenerate(options: never): PromiseLike<unknown>
   doStream(options: never): PromiseLike<unknown>
 }
@@ -303,16 +318,16 @@ export function promptguard<M extends LanguageModelLike>(
   // The same composition `wrapLanguageModel` performs: transform the call's
   // options, then let the wrap hook run the model with them.
   const call = async (type: "generate" | "stream", params: object): Promise<unknown> => {
-    const transformed = await middleware.transformParams({ params })
+    const transformed = await middleware.transformParams({ params, model })
     const doGenerate = () => model.doGenerate(transformed as never)
     const doStream = () => model.doStream(transformed as never)
     if (type === "generate") {
       return middleware.wrapGenerate
-        ? middleware.wrapGenerate({ doGenerate, params: transformed })
+        ? middleware.wrapGenerate({ doGenerate, params: transformed, model })
         : doGenerate()
     }
     return middleware.wrapStream
-      ? middleware.wrapStream({ doStream, params: transformed })
+      ? middleware.wrapStream({ doStream, params: transformed, model })
       : doStream()
   }
   const doGenerate = (params: object) => call("generate", params)
@@ -346,9 +361,24 @@ function isLanguageModel(value: unknown): value is LanguageModelLike {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function modelIdOf(params: object | undefined): string | undefined {
-  const modelId = (params as { modelId?: unknown } | undefined)?.modelId
-  return typeof modelId === "string" ? modelId : undefined
+/** What the hooks read from the model `wrapLanguageModel` hands them. */
+interface ModelIdentity {
+  readonly modelId?: unknown
+}
+
+/**
+ * The model id a Guard request reports. The AI SDK puts it on the model the
+ * hooks receive, never in the call options; `params.modelId` is read only
+ * when no model is passed, as when a hook is called directly.
+ */
+function modelIdOf(
+  model: ModelIdentity | undefined,
+  params: object | undefined,
+): string | undefined {
+  for (const id of [model?.modelId, (params as { modelId?: unknown } | undefined)?.modelId]) {
+    if (typeof id === "string" && id) return id
+  }
+  return undefined
 }
 
 /**

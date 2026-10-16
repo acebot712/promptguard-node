@@ -56,6 +56,15 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Fixed
 
+- **Guard requests from the Vercel AI SDK integration now name the model.**
+  The middleware read the model id from the call options, where the AI SDK
+  never puts it, so every input and output scan reached the Guard API with
+  no model. It now takes the id from the model the AI SDK hands its hooks,
+  for generated and streamed calls, and `promptguard(model)` does the same.
+- **The README now says how a blocked stream reaches `streamText()`.** It
+  said `onError` and an `error` part; that holds only for a blocked prompt.
+  Blocked output is thrown from whatever reads the stream and never reaches
+  `onError`, and on ai@5 `await result.text` never settles.
 - **`promptGuardMiddleware()` now type-checks with the real `ai` types.**
   Passing it to `wrapLanguageModel` was a TypeScript error on ai@5, ai@6 and
   ai@7: `transformParams` returned `Record<string, unknown>` where each
