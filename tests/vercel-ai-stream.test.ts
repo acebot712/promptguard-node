@@ -228,63 +228,152 @@ describe("promptGuardMiddleware wrapStream", () => {
   })
 
   describe("windowed scanning", () => {
-    test("releases a scanned window before the model has finished", async () => {
-      global.fetch = guardFetchSequence(ALLOW, ALLOW)
-      let source!: ReadableStreamDefaultController<Part>
-      const upstream = new ReadableStream<Part>({
-        start(c) {
-          source = c
-        },
-      })
-      const reader = (await wrap(middleware({ streamWindowChars: 10 }), upstream)).getReader()
-
-      source.enqueue({ type: "text-delta", id: "t", delta: "first window!" })
-      // Delivered while the upstream is still open: the stream is not buffered.
-      const first = await reader.read()
-      expect(first.value).toEqual({ type: "text-delta", id: "t", delta: "first window!" })
-
-      source.enqueue({ type: "text-delta", id: "t", delta: " tail" })
-      source.close()
-      const rest: Part[] = []
-      for (let r = await reader.read(); !r.done; r = await reader.read()) rest.push(r.value)
-      expect(rest).toEqual([{ type: "text-delta", id: "t", delta: " tail" }])
+    // Windows are counted in characters of text; the last 200 scanned
+    // characters (the overlap) are always carried into the next window.
+    const seg = (ch: string, n = 100): Part => ({
+      type: "text-delta",
+      id: "t",
+      delta: ch.repeat(n),
     })
 
-    test("a block found mid-stream stops the stream before the offending window", async () => {
+    /** A source the test feeds by hand, so it can read before the model finishes. */
+    function manualSource() {
+      let controller!: ReadableStreamDefaultController<Part>
+      const stream = new ReadableStream<Part>({
+        start(c) {
+          controller = c
+        },
+      })
+      return { stream, controller }
+    }
+
+    /** Resolves to the next part, or to "nothing yet" if none arrives promptly. */
+    async function readSoon(reader: ReadableStreamDefaultReader<Part>) {
+      const timeout = new Promise<"nothing yet">((r) => setTimeout(() => r("nothing yet"), 50))
+      const next = reader.read().then((r) => r.value)
+      return Promise.race([next, timeout])
+    }
+
+    test("releases scanned text before the model has finished", async () => {
+      global.fetch = guardFetchSequence(ALLOW, ALLOW)
+      const source = manualSource()
+      const reader = (
+        await wrap(middleware({ streamWindowChars: 1000 }), source.stream)
+      ).getReader()
+
+      const parts = Array.from({ length: 10 }, (_, i) => seg(String(i)))
+      for (const p of parts) source.controller.enqueue(p)
+      // Delivered while the upstream is still open: the stream is not buffered.
+      expect(await reader.read()).toEqual({ done: false, value: parts[0] })
+
+      source.controller.close()
+      const rest: Part[] = []
+      for (let r = await reader.read(); !r.done; r = await reader.read()) rest.push(r.value)
+      expect(rest).toEqual(parts.slice(1))
+    })
+
+    test("a secret split across a window boundary is never half-released", async () => {
+      // Window 1 ends with the first half of the SSN and scans clean on its
+      // own; the second half arrives in window 2.
       const fetchMock = guardFetchSequence(ALLOW, BLOCK)
       global.fetch = fetchMock
       const parts: Part[] = [
-        { type: "text-delta", id: "t", delta: "harmless opening " },
-        { type: "text-delta", id: "t", delta: "SSN 123-45-6789 " },
-        { type: "text-delta", id: "t", delta: "never reached" },
+        ...Array.from({ length: 9 }, () => seg("a")),
+        { type: "text-delta", id: "t", delta: `${"a".repeat(95)}123-4` },
+        { type: "text-delta", id: "t", delta: "5-6789 is the SSN" },
         { type: "finish", finishReason: "stop", usage: {} },
       ]
-      const out = await drain(await wrap(middleware({ streamWindowChars: 15 }), streamOf(parts)))
+      const out = await drain(await wrap(middleware({ streamWindowChars: 1000 }), streamOf(parts)))
+
+      expect(out.error).toBeInstanceOf(PromptGuardBlockedError)
+      expect(deliveredText(out.parts)).toBe("a".repeat(800))
+      expect(deliveredText(out.parts)).not.toContain("123")
+      expect(guardBodies(fetchMock)[1].content).toContain("123-45-6789")
+    })
+
+    test("a block found mid-stream stops the stream; the next window carries the overlap", async () => {
+      const fetchMock = guardFetchSequence(ALLOW, BLOCK)
+      global.fetch = fetchMock
+      const parts: Part[] = [
+        seg("p"),
+        seg("q"),
+        seg("r"),
+        seg("s"),
+        seg("t"),
+        { type: "text-delta", id: "t", delta: "SSN 123-45-6789 ".padEnd(100, "u") },
+        seg("v"),
+        { type: "finish", finishReason: "stop", usage: {} },
+      ]
+      const out = await drain(await wrap(middleware({ streamWindowChars: 300 }), streamOf(parts)))
 
       expect(out.error).toBeInstanceOf(PromptGuardBlockedError)
       expect(out.parts).toEqual([parts[0]])
       expect(fetchMock).toHaveBeenCalledTimes(2)
-      // The second window is scanned with the end of the first as context, so
-      // a secret split across a window boundary is still seen whole.
-      expect(guardBodies(fetchMock)[1].content).toContain("opening SSN 123-45-6789")
+      const second = guardBodies(fetchMock)[1].content
+      expect(second.startsWith("q".repeat(100) + "r".repeat(100))).toBe(true)
+      expect(second).toContain("123-45-6789")
     })
 
     test("the complete text is scanned once more at the end", async () => {
       const fetchMock = guardFetchSequence(ALLOW, ALLOW, BLOCK)
       global.fetch = fetchMock
       const parts: Part[] = [
-        { type: "text-delta", id: "t", delta: "aaaaaaaaaaaa" },
-        { type: "text-delta", id: "t", delta: "bbbbbbbbbbbb" },
-        { type: "text-delta", id: "t", delta: "cc" },
+        ...["a", "b", "c", "d", "e", "f"].map((ch) => seg(ch)),
+        { type: "text-delta", id: "t", delta: "gg" },
         { type: "finish", finishReason: "stop", usage: {} },
       ]
-      const out = await drain(await wrap(middleware({ streamWindowChars: 10 }), streamOf(parts)))
+      const out = await drain(await wrap(middleware({ streamWindowChars: 300 }), streamOf(parts)))
 
       expect(out.error).toBeInstanceOf(PromptGuardBlockedError)
-      expect(out.parts).toEqual([parts[0], parts[1]])
+      // Released: everything followed by at least the 200-character overlap.
+      expect(out.parts).toEqual(parts.slice(0, 4))
       const bodies = guardBodies(fetchMock)
       expect(bodies).toHaveLength(3)
-      expect(bodies[2].content).toBe("aaaaaaaaaaaabbbbbbbbbbbbcc")
+      expect(bodies[2].content).toBe(deliveredText(parts))
+    })
+
+    test("parts that carry no scanned text are not held behind nothing", async () => {
+      global.fetch = guardFetchSequence(ALLOW)
+      const source = manualSource()
+      const reader = (await wrap(middleware(), source.stream)).getReader()
+
+      const reasoning: Part = { type: "reasoning-delta", id: "r", delta: "thinking..." }
+      source.controller.enqueue({ type: "stream-start", warnings: [] })
+      source.controller.enqueue(reasoning)
+      expect(await readSoon(reader)).toEqual({ type: "stream-start", warnings: [] })
+      expect(await readSoon(reader)).toEqual(reasoning)
+
+      // Once text is held, later parts queue behind it so order is preserved.
+      const text: Part = { type: "text-delta", id: "t", delta: "an answer" }
+      const sourcePart: Part = { type: "source", sourceType: "url", id: "s", url: "https://x.test" }
+      source.controller.enqueue(text)
+      source.controller.enqueue(sourcePart)
+      const pendingRead = reader.read()
+      const early = await Promise.race([
+        pendingRead.then((r) => r.value),
+        new Promise((r) => setTimeout(() => r("nothing yet"), 50)),
+      ])
+      expect(early).toBe("nothing yet")
+
+      const finish: Part = { type: "finish", finishReason: "stop", usage: {} }
+      source.controller.enqueue(finish)
+      source.controller.close()
+      expect((await pendingRead).value).toEqual(text)
+      const rest: Part[] = []
+      for (let r = await reader.read(); !r.done; r = await reader.read()) rest.push(r.value)
+      expect(rest).toEqual([sourcePart, finish])
+    })
+
+    test("a tool call and the finish part wait for the final scan", async () => {
+      const fetchMock = guardFetchSequence(BLOCK)
+      global.fetch = fetchMock
+      const parts: Part[] = [
+        { type: "tool-call", toolCallId: "c", toolName: "x", input: '{"ssn":"123-45-6789"}' },
+        { type: "finish", finishReason: "tool-calls", usage: {} },
+      ]
+      const out = await drain(await wrap(middleware(), streamOf(parts)))
+      expect(out.error).toBeInstanceOf(PromptGuardBlockedError)
+      expect(out.parts).toEqual([])
     })
 
     test("streamWindowChars: Infinity holds the whole response for one scan", async () => {
@@ -309,9 +398,9 @@ describe("promptGuardMiddleware wrapStream", () => {
 
   describe("Guard API unreachable mid-stream (ADR-0002)", () => {
     const parts: Part[] = [
-      { type: "text-delta", id: "t", delta: "first window!" },
-      { type: "text-delta", id: "t", delta: "second window" },
-      { type: "text-delta", id: "t", delta: "!" },
+      ...["a", "b", "c", "d", "e", "f"].map(
+        (ch): Part => ({ type: "text-delta", id: "t", delta: ch.repeat(100) }),
+      ),
       { type: "finish", finishReason: "stop", usage: {} },
     ]
 
@@ -323,7 +412,7 @@ describe("promptGuardMiddleware wrapStream", () => {
         .mockRejectedValue(new TypeError("fetch failed"))
       global.fetch = fetchMock
       const out = await drain(
-        await wrap(middleware({ streamWindowChars: 10, maxRetries: 0 }), streamOf(parts)),
+        await wrap(middleware({ streamWindowChars: 300, maxRetries: 0 }), streamOf(parts)),
       )
 
       expect(out.error).toBeUndefined()
@@ -342,7 +431,7 @@ describe("promptGuardMiddleware wrapStream", () => {
         .mockRejectedValue(new TypeError("fetch failed"))
       const out = await drain(
         await wrap(
-          middleware({ streamWindowChars: 10, maxRetries: 0, failOpen: false }),
+          middleware({ streamWindowChars: 300, maxRetries: 0, failOpen: false }),
           streamOf(parts),
         ),
       )
