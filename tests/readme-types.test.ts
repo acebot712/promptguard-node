@@ -58,7 +58,7 @@ describe("README TypeScript Support snippet", () => {
       checksPassed: 1,
       checksFailed: 0,
       checksWarned: 0,
-      instrumentation: { patched: [], detectedUnpatched: [], adviceUrl: "" },
+      instrumentation: { patched: [], detectedUnpatched: [], middleware: [], adviceUrl: "" },
       baseUrl: "",
       sdkVersion: "",
     }
