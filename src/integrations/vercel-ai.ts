@@ -51,6 +51,7 @@ import {
 } from "../guard"
 import { type LogLevel, logger, setLogLevel } from "../logger"
 import { resolveCredentials } from "../resolve"
+import { asSessionId, validateSessionId } from "./session"
 import {
   DEFAULT_STREAM_WINDOW_CHARS,
   extractGeneratedText,
@@ -91,6 +92,13 @@ export interface PromptGuardMiddlewareOptions extends Omit<GuardClientConfig, "a
   logLevel?: LogLevel
   /** Convenience shorthand for `logLevel: "silent"`. */
   silent?: boolean
+  /**
+   * The Conversation to name when a call names none of its own. The AI SDK
+   * has no conversation id, so a call names one with
+   * `providerOptions: { promptguard: { sessionId } }` (`providerMetadata` on
+   * `ai@4`), which wins over this. Without either, no session id is sent.
+   */
+  sessionId?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +131,9 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions = {}
   const mode = options.mode ?? "enforce"
   const scanResponses = options.scanResponses ?? false
   const failOpen = options.failOpen ?? true
+  const defaultSessionId = validateSessionId(options.sessionId)
+  const sessionIdOf = (params: object | undefined): string | undefined =>
+    callSessionId(params) ?? defaultSessionId
   const outputPolicy: OutputScanPolicy = {
     guard,
     mode,
@@ -155,8 +166,10 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions = {}
       if (!guardMessages.length) return params
 
       try {
+        const sessionId = sessionIdOf(params)
         const decision = await guard.scan(guardMessages, "input", modelIdOf(model, params), {
           framework: "vercel-ai-sdk",
+          ...(sessionId !== undefined ? { sessionId } : {}),
         })
 
         if (decision.blocked) {
@@ -231,7 +244,13 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions = {}
           const text = extractGeneratedText(result as Record<string, unknown>)
           if (!text) return result
 
-          await scanOutputText(text, outputPolicy, modelIdOf(model, params))
+          await scanOutputText(
+            text,
+            outputPolicy,
+            modelIdOf(model, params),
+            "response",
+            sessionIdOf(params),
+          )
           return result
         }
       : undefined,
@@ -267,11 +286,31 @@ export function promptGuardMiddleware(options: PromptGuardMiddlewareOptions = {}
               outputPolicy,
               modelIdOf(model, params),
               streamStopFor(model),
+              sessionIdOf(params),
             ),
           } as R
         }
       : undefined,
   }
+}
+
+/**
+ * The Conversation a call names: `providerOptions.promptguard.sessionId`
+ * (call options V2 and later, `ai@5+`) or `providerMetadata.promptguard.sessionId`
+ * (V1, `ai@4`). A provider reads only its own key, so ours passes through
+ * every provider untouched.
+ */
+function callSessionId(params: object | undefined): string | undefined {
+  const call = params as
+    | {
+        providerOptions?: { promptguard?: { sessionId?: unknown } }
+        providerMetadata?: { promptguard?: { sessionId?: unknown } }
+      }
+    | undefined
+  return (
+    asSessionId(call?.providerOptions?.promptguard?.sessionId) ??
+    asSessionId(call?.providerMetadata?.promptguard?.sessionId)
+  )
 }
 
 // ---------------------------------------------------------------------------

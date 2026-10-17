@@ -17,10 +17,14 @@ import { logger } from "../logger"
 
 export interface PatchConfig {
   framework: string
+  /**
+   * The call's messages and model, and the Conversation it belongs to when
+   * the provider API names one (`sessionId`, sent as `context.session_id`).
+   */
   extractMessages: (
     args: unknown[],
     thisArg: unknown,
-  ) => { messages: GuardMessage[]; model?: string }
+  ) => { messages: GuardMessage[]; model?: string; sessionId?: string }
   extractResponseText?: (response: unknown, args: unknown[]) => string | null
   /**
    * Rewrite the call args with the redacted message contents.
@@ -74,7 +78,7 @@ export function createPatchedMethod(
     const guard: GuardClient | null = getGuardClient()
     if (!guard) return original.apply(this, args)
 
-    const { messages, model } = config.extractMessages(args, this)
+    const { messages, model, sessionId } = config.extractMessages(args, this)
 
     if (!messages.length) {
       // An intercepted call whose body we could not extract anything from
@@ -89,7 +93,10 @@ export function createPatchedMethod(
       let decision = null
 
       try {
-        decision = await guard.scan(messages, "input", model, { framework: config.framework })
+        decision = await guard.scan(messages, "input", model, {
+          framework: config.framework,
+          ...(sessionId !== undefined ? { sessionId } : {}),
+        })
       } catch (err: unknown) {
         // Only the Guard API being unreachable is eligible for fail-open.
         // Any other error is a real bug and must surface.

@@ -88,20 +88,22 @@ export type OutputScanOutcome = "scanned" | "failed-open"
 /**
  * Scan one piece of model output. Resolves when the output may be delivered;
  * throws `PromptGuardBlockedError` when enforce mode stops it, and rethrows
- * the `GuardApiError` when failing closed.
+ * the `GuardApiError` when failing closed. `sessionId` names the
+ * Conversation the call belongs to, when it names one.
  */
 export async function scanOutputText(
   text: string,
   policy: OutputScanPolicy,
   modelId: string | undefined,
   what = "response",
+  sessionId?: string,
 ): Promise<OutputScanOutcome> {
   try {
     const decision = await policy.guard.scan(
       [{ role: "assistant", content: text }],
       "output",
       modelId,
-      { framework: "vercel-ai-sdk" },
+      { framework: "vercel-ai-sdk", ...(sessionId !== undefined ? { sessionId } : {}) },
     )
     if (decision.blocked || decision.redacted) {
       // Generated output cannot be rewritten after the fact, so an
@@ -261,6 +263,7 @@ export function scanOutputStream<T>(
   policy: OutputScanPolicy,
   modelId: string | undefined,
   stopAs: StreamStop = "error",
+  sessionId?: string,
 ): ReadableStream<T> {
   const output = new StreamedOutput()
   const enforce = policy.mode === "enforce"
@@ -351,7 +354,7 @@ export function scanOutputStream<T>(
     unscannedChars = 0
     const window = held.map((h) => h.text).join("")
     // Throws on block or fail-closed, which stops the stream (see `stop`).
-    const outcome = await scanOutputText(window, policy, modelId, `rest of ${what}`)
+    const outcome = await scanOutputText(window, policy, modelId, `rest of ${what}`, sessionId)
     if (outcome === "scanned") {
       releaseScanned(controller)
     } else {
@@ -363,7 +366,7 @@ export function scanOutputStream<T>(
   async function finish(controller: TransformStreamDefaultController<T>): Promise<void> {
     if (unscanned) return
     const text = output.text()
-    if (text) await scanOutputText(text, policy, modelId, what)
+    if (text) await scanOutputText(text, policy, modelId, what, sessionId)
     releaseAll(controller)
   }
 }

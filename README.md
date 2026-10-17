@@ -207,6 +207,27 @@ console.log(result.redacted);
 
 ## Framework Integrations
 
+### Conversations (`session_id`)
+
+Each scan can name the conversation it belongs to in `context.session_id`, so the Guard API can relate the turns of one conversation to each other. An integration sends the framework's **own** conversation id there, the same on every turn of one conversation, and sends **nothing** when the framework has none. It never invents one: a per-call run id would make every scan a conversation of its own.
+
+| Integration | Where the session id comes from |
+|---|---|
+| LangChain.js / LangGraph.js callback handler | The call's `thread_id`: LangGraph puts its checkpointer's `configurable.thread_id` in every callback's metadata. For a plain chain or model, set `{ metadata: { thread_id } }` in the call config (`session_id` and `conversation_id` are read too, the keys LangSmith groups a thread by). |
+| Vercel AI SDK (`promptguard()` / `promptGuardMiddleware()`) | The AI SDK has no conversation id, so a call names one: `providerOptions: { promptguard: { sessionId } }` (`providerMetadata` on `ai` 4). Providers ignore a key that is not theirs. |
+| Auto-instrumentation (`init()`) | The OpenAI Responses API's `conversation` (an id or `{ id }`). `previous_response_id` changes every turn and is not used. Other provider APIs carry no conversation id. |
+
+The handler and the middleware also take a `sessionId` option, used only when the call names no conversation of its own; the call's id wins. An empty string throws a `TypeError`.
+
+```typescript
+const { text } = await generateText({
+  model,
+  prompt: 'Hello!',
+  providerOptions: { promptguard: { sessionId: 'chat-42' } },
+});
+// this scan, and every later call naming chat-42, sends session_id: "chat-42"
+```
+
 ### LangChain.js
 
 ```typescript
