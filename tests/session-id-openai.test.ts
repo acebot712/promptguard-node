@@ -76,7 +76,7 @@ test("an overlong conversation is dropped", async () => {
   await new MockResponses().create({
     model: "gpt-5-nano",
     input: "hi",
-    conversation: "c".repeat(257),
+    conversation: "c".repeat(256),
   })
 
   expect(sessionIds()).toEqual(["<none>"])

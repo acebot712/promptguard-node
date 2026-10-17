@@ -211,14 +211,14 @@ describe("LangChain.js callback handler", () => {
 
   test("an overlong thread id is dropped", async () => {
     const h = handler()
-    await langchainTurn(h, "hello", { thread_id: "t".repeat(257) })
     await langchainTurn(h, "hello", { thread_id: "t".repeat(256) })
+    await langchainTurn(h, "hello", { thread_id: "t".repeat(255) })
 
-    expect(api.sessionIds()).toEqual([NO_SESSION, NO_SESSION, "t".repeat(256), "t".repeat(256)])
+    expect(api.sessionIds()).toEqual([NO_SESSION, NO_SESSION, "t".repeat(255), "t".repeat(255)])
   })
 
   test("an overlong explicit sessionId is refused", () => {
-    expect(() => handler({ sessionId: "s".repeat(257) })).toThrow("256")
+    expect(() => handler({ sessionId: "s".repeat(256) })).toThrow("255")
   })
 })
 
@@ -290,7 +290,7 @@ describe("Vercel AI SDK middleware", () => {
 
   test("an overlong call sessionId is dropped", async () => {
     const model = vercelModel()
-    await vercelTurn(model, "hello", "c".repeat(257))
+    await vercelTurn(model, "hello", "c".repeat(256))
 
     expect(api.sessionIds()).toEqual([NO_SESSION])
   })
