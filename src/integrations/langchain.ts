@@ -190,6 +190,7 @@ export class PromptGuardCallbackHandler {
 
     const decision = await this.safeScan(messages, "input", model, context)
     this.handleDecision(decision, runId)
+    this.rememberRun(runId, context.sessionId)
   }
 
   async handleChatModelStart(
@@ -217,6 +218,7 @@ export class PromptGuardCallbackHandler {
 
     const decision = await this.safeScan(guardMessages, "input", model, context)
     this.handleDecision(decision, runId)
+    this.rememberRun(runId, context.sessionId)
   }
 
   async handleLLMEnd(output: unknown, runId: string): Promise<void> {
@@ -297,6 +299,7 @@ export class PromptGuardCallbackHandler {
       context,
     )
     this.handleDecision(decision, runId)
+    this.rememberRun(runId, context.sessionId)
   }
 
   async handleToolEnd(output: unknown, runId: string): Promise<void> {
@@ -376,6 +379,19 @@ export class PromptGuardCallbackHandler {
     }
   }
 
+  /**
+   * Keep a run's session id for its end scan.
+   *
+   * Called only once the start scan has returned: @langchain/core starts a
+   * run outside the block whose error path calls `handleLLMError`, so a
+   * start that throws gets no end or error callback, and anything stored
+   * before it would never be removed. Nothing is stored when the end scan
+   * will not run, or would name no session.
+   */
+  private rememberRun(runId: string, sessionId: string | undefined): void {
+    if (sessionId !== undefined && this.scanResponses) this.runSessions.set(runId, sessionId)
+  }
+
   /** Forget a finished LLM or tool run; return the session id it started with. */
   private endRun(runId: string): string | undefined {
     const sessionId = this.runSessions.get(runId)
@@ -385,8 +401,8 @@ export class PromptGuardCallbackHandler {
 
   /**
    * The scan's context. A start callback passes its `metadata`, and the
-   * session id is read from it and remembered for the run's end; an end
-   * callback passes the `sessionId` its start remembered.
+   * session id is read from it; an end callback passes the `sessionId` its
+   * start remembered. Nothing is stored here.
    */
   private buildContext(
     runId: string,
@@ -409,7 +425,6 @@ export class PromptGuardCallbackHandler {
         sessionIdFromMetadata(metadata) ??
         (chainInfo.session_id as string | undefined) ??
         this.sessionId
-      this.runSessions.set(runId, sessionId)
     }
 
     return {

@@ -8,6 +8,14 @@
  * every scan a conversation of its own.
  */
 
+import { logger } from "../logger"
+
+/**
+ * The longest session id sent. Longer is not a conversation id but a payload,
+ * and the Guard API refuses it, so it is dropped before the scan.
+ */
+export const MAX_SESSION_ID_CHARS = 256
+
 /**
  * The metadata keys a LangChain call carries its conversation id under, in
  * the order they are read. LangGraph copies the checkpointer's `thread_id`
@@ -19,11 +27,23 @@ export const CONVERSATION_METADATA_KEYS = ["thread_id", "session_id", "conversat
 /**
  * `value` as a session id, or `undefined` when it cannot be one: a non-empty
  * string as it is, a finite number in its decimal form, anything else not.
+ * Nor an id over {@link MAX_SESSION_ID_CHARS}: it is dropped with a debug log
+ * and the scan goes ahead without one, never failing the call (ADR-0002).
  */
 export function asSessionId(value: unknown): string | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return String(value)
-  if (typeof value === "string" && value.trim()) return value
-  return undefined
+  const id =
+    typeof value === "number" && Number.isFinite(value)
+      ? String(value)
+      : typeof value === "string" && value.trim()
+        ? value
+        : undefined
+  if (id !== undefined && id.length > MAX_SESSION_ID_CHARS) {
+    logger.debug(
+      `session id of ${id.length} characters is over ${MAX_SESSION_ID_CHARS}; scanning without one`,
+    )
+    return undefined
+  }
+  return id
 }
 
 /** The conversation id a LangChain call's metadata names, if any. */
@@ -43,6 +63,10 @@ export function validateSessionId(sessionId: string | undefined): string | undef
   if (sessionId === undefined) return undefined
   if (typeof sessionId !== "string" || !sessionId.trim()) {
     throw new TypeError(`sessionId must be a non-empty string, got ${JSON.stringify(sessionId)}`)
+  }
+  if (sessionId.length > MAX_SESSION_ID_CHARS) {
+    // Configuration, not a request: refused when the integration is built.
+    throw new TypeError(`sessionId must be at most ${MAX_SESSION_ID_CHARS} characters`)
   }
   return sessionId
 }

@@ -217,7 +217,7 @@ Each scan can name the conversation it belongs to in `context.session_id`, so th
 | Vercel AI SDK (`promptguard()` / `promptGuardMiddleware()`) | The AI SDK has no conversation id, so a call names one: `providerOptions: { promptguard: { sessionId } }` (`providerMetadata` on `ai` 4). Providers ignore a key that is not theirs. |
 | Auto-instrumentation (`init()`) | The OpenAI Responses API's `conversation` (an id or `{ id }`). `previous_response_id` changes every turn and is not used. Other provider APIs carry no conversation id. |
 
-The handler and the middleware also take a `sessionId` option, used only when the call names no conversation of its own; the call's id wins. An empty string throws a `TypeError`.
+The handler and the middleware also take a `sessionId` option, used only when the call names no conversation of its own; the call's id wins. An empty string, or one over 256 characters, throws a `TypeError` there. An id over 256 characters that arrives with a call is dropped with a debug log, and the scan goes ahead without one.
 
 ```typescript
 const { text } = await generateText({

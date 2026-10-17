@@ -15,6 +15,7 @@
  */
 
 import type { GuardMessage } from "../guard"
+import { asSessionId } from "../integrations/session"
 import { logger } from "../logger"
 import { createPatchedMethod } from "./base"
 
@@ -266,7 +267,7 @@ export function responsesConversationId(conversation: unknown): string | undefin
     conversation && typeof conversation === "object"
       ? (conversation as { id?: unknown }).id
       : conversation
-  return typeof id === "string" && id.trim() ? id : undefined
+  return typeof id === "string" ? asSessionId(id) : undefined
 }
 
 function applyResponsesPatch(): boolean {
