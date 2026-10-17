@@ -21,7 +21,7 @@ survives three releases is a changelog nobody is maintaining.
   take a `sessionId` option for a conversation the call does not name; the
   call's own id wins over it. Auto-instrumentation sends an OpenAI Responses
   call's `conversation` as `session_id`. See "Conversations" in the README.
-  A session id over 256 characters is dropped with a debug log and the scan
+  A session id over 255 characters is dropped with a debug log and the scan
   goes ahead without one; passed as an option, it is a `TypeError`.
 - **`promptguard(model)` for the Vercel AI SDK**
   (`promptguard-sdk/integrations/vercel-ai`). Wraps a language model so its
