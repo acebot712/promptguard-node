@@ -71,3 +71,13 @@ test("a call with no conversation sends no session id", async () => {
 
   expect(sessionIds()).toEqual(["<none>"])
 })
+
+test("an overlong conversation is dropped", async () => {
+  await new MockResponses().create({
+    model: "gpt-5-nano",
+    input: "hi",
+    conversation: "c".repeat(257),
+  })
+
+  expect(sessionIds()).toEqual(["<none>"])
+})
