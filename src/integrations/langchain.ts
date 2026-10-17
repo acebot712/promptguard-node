@@ -15,6 +15,12 @@
  * // or
  * await chain.invoke({ input: '...' }, { callbacks: [handler] });
  * ```
+ *
+ * Every scan names its Conversation in `session_id` with the call's own
+ * thread id: the `thread_id` LangGraph puts in every callback's metadata, or a
+ * `thread_id` / `session_id` / `conversation_id` set in `config.metadata`. A
+ * call that names no thread sends no session id, unless the handler was given
+ * a `sessionId` of its own.
  */
 
 import {
@@ -29,6 +35,7 @@ import {
 } from "../guard"
 import { type LogLevel, logger, setLogLevel } from "../logger"
 import { resolveCredentials } from "../resolve"
+import { sessionIdFromMetadata, validateSessionId } from "./session"
 
 // ---------------------------------------------------------------------------
 // Options
@@ -51,6 +58,13 @@ export interface PromptGuardCallbackOptions extends GuardClientConfig {
   logLevel?: LogLevel
   /** Convenience shorthand for `logLevel: "silent"`. */
   silent?: boolean
+  /**
+   * The Conversation to name when a call carries no thread id of its own —
+   * for a handler that serves one conversation. A call's `thread_id` (or
+   * `session_id` / `conversation_id`) in its metadata always wins. Without
+   * either, no session id is sent.
+   */
+  sessionId?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -124,9 +138,16 @@ export class PromptGuardCallbackHandler {
   private readonly mode: "enforce" | "monitor"
   private readonly scanResponses: boolean
   private readonly failOpen: boolean
+  private readonly sessionId: string | undefined
 
   /** Chain context per run ID for richer threat detection. */
   private chainContext = new Map<string, Record<string, unknown>>()
+
+  /**
+   * The session id each in-flight LLM or tool run started with: its end
+   * callback carries no metadata, and must name the same Conversation.
+   */
+  private runSessions = new Map<string, string | undefined>()
 
   constructor(options: PromptGuardCallbackOptions) {
     if (options.silent) setLogLevel("silent")
@@ -146,6 +167,7 @@ export class PromptGuardCallbackHandler {
     // (least surprise + no unexpected per-response Guard API cost).
     this.scanResponses = options.scanResponses ?? false
     this.failOpen = options.failOpen ?? true
+    this.sessionId = validateSessionId(options.sessionId)
   }
 
   // -- LLM callbacks -------------------------------------------------------
@@ -168,6 +190,7 @@ export class PromptGuardCallbackHandler {
 
     const decision = await this.safeScan(messages, "input", model, context)
     this.handleDecision(decision, runId)
+    this.rememberRun(runId, context.sessionId)
   }
 
   async handleChatModelStart(
@@ -195,15 +218,19 @@ export class PromptGuardCallbackHandler {
 
     const decision = await this.safeScan(guardMessages, "input", model, context)
     this.handleDecision(decision, runId)
+    this.rememberRun(runId, context.sessionId)
   }
 
   async handleLLMEnd(output: unknown, runId: string): Promise<void> {
+    const sessionId = this.endRun(runId)
     if (!this.scanResponses) return
 
     const text = this.extractLLMResponse(output)
     if (!text) return
 
-    const context = this.buildContext(runId, undefined, "llm_response")
+    const context = this.buildContext(runId, undefined, "llm_response", undefined, undefined, {
+      sessionId,
+    })
     const decision = await this.safeScan(
       [{ role: "assistant", content: text }],
       "output",
@@ -215,6 +242,7 @@ export class PromptGuardCallbackHandler {
 
   handleLLMError(_error: Error, runId: string): void {
     this.chainContext.delete(runId)
+    this.runSessions.delete(runId)
   }
 
   // -- Chain callbacks -----------------------------------------------------
@@ -225,12 +253,14 @@ export class PromptGuardCallbackHandler {
     runId: string,
     parentRunId?: string,
     tags?: string[],
+    metadata?: Record<string, unknown>,
   ): Promise<void> {
     const chainName = (serialized?.id as string[] | undefined)?.slice(-1)[0] ?? "unknown"
     this.chainContext.set(runId, {
       chain_name: chainName,
       parent_run_id: parentRunId,
       tags,
+      session_id: sessionIdFromMetadata(metadata),
     })
   }
 
@@ -269,14 +299,18 @@ export class PromptGuardCallbackHandler {
       context,
     )
     this.handleDecision(decision, runId)
+    this.rememberRun(runId, context.sessionId)
   }
 
   async handleToolEnd(output: unknown, runId: string): Promise<void> {
+    const sessionId = this.endRun(runId)
     if (!this.scanResponses) return
     const text = output ? String(output) : ""
     if (!text) return
 
-    const context = this.buildContext(runId, undefined, "tool_response")
+    const context = this.buildContext(runId, undefined, "tool_response", undefined, undefined, {
+      sessionId,
+    })
     const decision = await this.safeScan(
       [{ role: "assistant", content: text }],
       "output",
@@ -288,6 +322,7 @@ export class PromptGuardCallbackHandler {
 
   handleToolError(_error: Error, runId: string): void {
     this.chainContext.delete(runId)
+    this.runSessions.delete(runId)
   }
 
   // -- Internal helpers ----------------------------------------------------
@@ -344,22 +379,58 @@ export class PromptGuardCallbackHandler {
     }
   }
 
+  /**
+   * Keep a run's session id for its end scan.
+   *
+   * Called only once the start scan has returned: @langchain/core starts a
+   * run outside the block whose error path calls `handleLLMError`, so a
+   * start that throws gets no end or error callback, and anything stored
+   * before it would never be removed. Nothing is stored when the end scan
+   * will not run, or would name no session.
+   */
+  private rememberRun(runId: string, sessionId: string | undefined): void {
+    if (sessionId !== undefined && this.scanResponses) this.runSessions.set(runId, sessionId)
+  }
+
+  /** Forget a finished LLM or tool run; return the session id it started with. */
+  private endRun(runId: string): string | undefined {
+    const sessionId = this.runSessions.get(runId)
+    this.runSessions.delete(runId)
+    return sessionId
+  }
+
+  /**
+   * The scan's context. A start callback passes its `metadata`, and the
+   * session id is read from it; an end callback passes the `sessionId` its
+   * start remembered. Nothing is stored here.
+   */
   private buildContext(
     runId: string,
     parentRunId?: string,
     component = "unknown",
     tags?: string[],
     metadata?: Record<string, unknown>,
+    end?: { sessionId: string | undefined },
   ): GuardContext {
     const chainInfo =
       this.chainContext.get(runId) ??
       (parentRunId ? this.chainContext.get(parentRunId) : undefined) ??
       {}
 
+    let sessionId: string | undefined
+    if (end) {
+      sessionId = end.sessionId
+    } else {
+      sessionId =
+        sessionIdFromMetadata(metadata) ??
+        (chainInfo.session_id as string | undefined) ??
+        this.sessionId
+    }
+
     return {
       framework: "langchain",
       chainName: chainInfo.chain_name as string | undefined,
-      sessionId: runId,
+      ...(sessionId !== undefined ? { sessionId } : {}),
       metadata: {
         component,
         tags: tags ?? (chainInfo.tags as string[] | undefined),

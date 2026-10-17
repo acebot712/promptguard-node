@@ -14,6 +14,15 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Added
 
+- **`sessionId` for the Vercel AI SDK and LangChain.js integrations**
+  (acebot712/promptguard#956). A Vercel AI call names its conversation with
+  `providerOptions: { promptguard: { sessionId } }` (`providerMetadata` on ai 4),
+  and `promptguard()`, `promptGuardMiddleware()` and the LangChain.js handler
+  take a `sessionId` option for a conversation the call does not name; the
+  call's own id wins over it. Auto-instrumentation sends an OpenAI Responses
+  call's `conversation` as `session_id`. See "Conversations" in the README.
+  A session id over 255 characters is dropped with a debug log and the scan
+  goes ahead without one; passed as an option, it is a `TypeError`.
 - **`promptguard(model)` for the Vercel AI SDK**
   (`promptguard-sdk/integrations/vercel-ai`). Wraps a language model so its
   calls are scanned exactly as `promptGuardMiddleware` scans them under
@@ -43,6 +52,12 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Changed
 
+- **The LangChain.js handler sends the call's thread id as `session_id`, or
+  none** (acebot712/promptguard#956). It used to send each call's run id, so
+  no two scans ever shared a session. It now sends the call's `thread_id`
+  (from LangGraph, or from the call config's `metadata`, where `session_id`
+  and `conversation_id` are read too) on the start scan and the end scan
+  alike, and a call with no thread sends no `session_id` at all.
 - `SECURITY.md` links to the published disclosure policy
   (https://promptguard.co/security#reporting-a-vulnerability) instead of
   keeping its own copy of the response times.

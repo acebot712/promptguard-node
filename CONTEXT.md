@@ -81,6 +81,13 @@ held into the next window. The complete text is still scanned once more at
 the end; the window bounds how much is held, not what is scanned.
 _Avoid_: chunk (that is one stream part from the model), buffer, batch
 
+**Conversation**:
+The turns a framework treats as one exchange — a LangGraph thread, a chat the
+application names. A scan names it in `context.session_id` with the
+framework's own id, or names none; it is never a per-call run id.
+_Avoid_: session (the wire field's name, not the concept), thread (one
+framework's word for it)
+
 **Redaction**:
 A decision that rewrites the outgoing messages instead of stopping the call.
 When the call cannot be rewritten safely, enforce mode escalates it to a block.

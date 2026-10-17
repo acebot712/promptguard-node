@@ -15,6 +15,7 @@
  */
 
 import type { GuardMessage } from "../guard"
+import { asSessionId } from "../integrations/session"
 import { logger } from "../logger"
 import { createPatchedMethod } from "./base"
 
@@ -254,6 +255,21 @@ function applyChatCompletionsPatch(): boolean {
   return true
 }
 
+/**
+ * The Conversation a Responses call belongs to, as its `session_id`.
+ *
+ * `conversation` is the call's own conversation, an id or `{ id }` — the same
+ * on every turn. `previous_response_id` is not read: it names the previous
+ * response, so it changes every turn.
+ */
+export function responsesConversationId(conversation: unknown): string | undefined {
+  const id =
+    conversation && typeof conversation === "object"
+      ? (conversation as { id?: unknown }).id
+      : conversation
+  return typeof id === "string" ? asSessionId(id) : undefined
+}
+
 function applyResponsesPatch(): boolean {
   let Responses: { prototype: { create: unknown } }
   try {
@@ -276,6 +292,7 @@ function applyResponsesPatch(): boolean {
       return {
         messages: responsesInputToGuardFormat(params),
         model: params.model ? String(params.model) : undefined,
+        sessionId: responsesConversationId(params.conversation),
       }
     },
     extractResponseText: (response) => extractResponsesResponseText(response),
