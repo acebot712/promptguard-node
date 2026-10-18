@@ -12,6 +12,8 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.4.0] — 2026-10-18
+
 ### Added
 
 - **`sessionId` for the Vercel AI SDK and LangChain.js integrations**
