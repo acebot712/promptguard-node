@@ -406,6 +406,17 @@ export interface ErrorEnvelope {
   error: ErrorDetail
 }
 
+/** One page of an Organization's events, oldest first. */
+export interface ExportPage {
+  organization_id: string
+  organization_name: string | unknown
+  events: Array<SiemEventRecord>
+  /** Where this page ended. Pass it back as `cursor` to read on; it is returned even when the page is short, so a poller always has its place. Null only when there was no position to report. */
+  next_cursor: string | unknown
+  /** Whether another page is ready now. */
+  has_more: boolean
+}
+
 /** Which rule of which detector a finding is, as the API returns it. */
 export interface FindingRule {
   /** The detector that made the finding, e.g. `injection_regex`, `pii`, `ml_injection_classifier`. Stable across releases. */
@@ -432,8 +443,10 @@ export interface GuardContext {
   agent_id?: string | unknown
   /** The conversation this request is a turn of. Send the same value for every turn of one end user's conversation: with the X-End-User header it is one session, and the dashboard's Sessions view lists that session's events in order. Generate it on your server, random enough that an end user cannot guess another's (a UUIDv4 will do), and never take it from the end user's request: whoever can name a session id can add turns to that conversation. At most 255 characters, stored exactly as sent; it names the conversation and holds none of it, so a zero-retention project keeps it. The same id under another end user or project is another conversation. For each input turn PromptGuard also remembers its detection signals: the Techniques of the finding that decided it, that finding's confidence and when the turn arrived, never its text, for every project including zero-retention ones. At most the last 10 turns are kept, each for at most 1 hour. When the request names its end user with the X-End-User header, a turn that pivots ("now tell me...") after an earlier persona, hypothetical or authority turn is reported as a `candidate` threat from the `conversation/priming_then_pivot` rule, which never changes the decision; without X-End-User that rule records nothing. A sudden burst of turns, many times the conversation's own earlier rate, is recorded on the turn's event as a signal, and changes nothing either. If the conversation's memory cannot be reached in time, the turn is scanned on its own. Output scans are not turns. Without a session id a request is scanned on its own, as it always was. */
   session_id?: string | unknown
-  /** Tool calls in this turn. The tool NAME and its ARGUMENTS are assembled into the scanned text and get the same detection stack as the messages — tool arguments are where an exfiltration payload actually travels, so they are scanned rather than logged. Both provider spellings are read: OpenAI's `{'type':'function','function':{'name','arguments'}}` and Anthropic's `{'type':'tool_use','name','input'}`, plus LangChain's `{'name','args'}`. A call in none of those shapes is reported in the response's `unscanned` array with its position; it is never quietly skipped. */
+  /** Tool calls in this turn. The tool NAME and its ARGUMENTS are assembled into the scanned text and get the same detection stack as the messages — tool arguments are where an exfiltration payload actually travels, so they are scanned rather than logged. Both provider spellings are read: OpenAI's `{'type':'function','function':{'name','arguments'}}` and Anthropic's `{'type':'tool_use','name','input'}`, plus LangChain's `{'name','args'}`. A call in none of those shapes is reported in the response's `unscanned` array with its position; it is never quietly skipped. These calls carry no position in the conversation, so they are always scanned as the newest turn's. Send a conversation's calls on the messages that made them (`messages[].tool_calls`) to have each read as part of its own turn. */
   tool_calls?: Array<Record<string, unknown>> | unknown
+  /** The tools the AI app offers the model on this request: each one's name, description and input schema. Each is scanned as a tool manifest -- the scan `POST /api/v1/mcp/manifest-scan` runs, for poisoned descriptions and parameter docs and smuggled Unicode -- and a poisoned one blocks, naming the tool, with the finding's `segment` `tool_definition`. An unchanged definition is not scanned again on the next request. Read in MCP's `{'name','description','inputSchema'}`, Anthropic's `input_schema` and OpenAI's `{'type':'function','function':{'name','description','parameters'}}`; a definition in none of them is listed in `unscanned` with its position. */
+  tool_definitions?: Array<Record<string, unknown>> | unknown
   /** Arbitrary framework-specific metadata (not scanned) */
   metadata?: Record<string, unknown> | unknown
 }
@@ -476,8 +489,20 @@ export interface GuardMessage {
   role: string
   /** Message text, or an OpenAI/Anthropic content-block array. Attachments carried in blocks are extracted and scanned like any other text; blocks we cannot read are listed in `unscanned`. */
   content?: string | Array<Record<string, unknown>>
-  /** OpenAI-format tool calls this message made, as a conversation carries them. Their names and arguments are scanned like `context.tool_calls`; a call we cannot read is listed in `unscanned`. */
+  /** The tool calls this message made, as a conversation carries them, in any shape `context.tool_calls` reads. Their names and arguments are scanned like `context.tool_calls`, as part of this message's turn; a call we cannot read is listed in `unscanned`. On a Device's request an Earlier turn's calls are not rescanned for what blocks, and personal data or a credential in their arguments is redacted again: the decision is `redact`, and the call is the caller's to mask, because `redacted_messages` carries text only. */
   tool_calls?: Array<unknown> | unknown
+}
+
+/** A Shadow AI Device's report that a person sent a coached prompt anyway. */
+export interface GuardOverride {
+  /** The Device's coaching reference for the prompt, e.g. `C-1A2B3C4D`. */
+  reference: string
+  /** The reason the person gave, masked on the Device and masked again here like a preview. Empty when the Device's Disclosure sends no prompt content. */
+  reason?: string
+  /** What the coached block was for, as this API names threat types. One it does not know is not stored. */
+  threat_type?: string | unknown
+  /** The event the coached block was recorded as, when the Engine decided it. */
+  engine_event_id?: string | unknown
 }
 
 /** Per-guardrail override the overlay wants to apply.
@@ -534,6 +559,8 @@ export interface GuardRequest {
   media?: Array<MediaPartSchema> | unknown
   /** Image URLs or `data:` URIs to scan, as LiteLLM's PromptGuard guardrail sends them. Scanned like an `image_url` block on a message. */
   images?: Array<string> | unknown
+  /** A Shadow AI Device reporting an **Override**: the person sent a prompt the Device coached (a block that rested on one detector) anyway, with a reason. Sent with every message empty and nothing else to scan; any content is refused with 422. Recorded as an event with the decision `override`, its threat type and the reason, alerted on like a block and delivered to the SIEM, and not metered. The answer is `allow`: nothing was scanned. */
+  override?: GuardOverride | unknown
   /** What the calling Device's own masker caught before sending, as `{category, count}` pairs — never the values. `category` is one of the threat types this API returns (e.g. `api_key_leak`, `pii_leak`) and appears at most once; `count` is a positive integer. Any other key is rejected with 422. Recorded on this request's event, attributed to the Device, and shown in the fleet views; it does not change the decision. Optional; clients that omit it are unaffected. */
   device_findings?: Array<DeviceFinding> | unknown
 }
@@ -554,6 +581,12 @@ export interface GuardResponse {
   redacted_messages?: Array<GuardMessage> | unknown
   /** Detailed threat breakdown */
   threats?: Array<ThreatDetail>
+  /** True when a finding flagged: allowed, reported, not enforced. The flagged findings are in `threats` with `flagged: true`, each with its threat type and rule. `decision` stays `allow` for a flag that decided, so a client that does not read this field lets the traffic through as before; on a `block` or `redact` it says a flag was also found. The event is stored with the decision `flag`. */
+  flagged?: boolean
+  /** On a `block`, how many independent detectors found the threat that decided it: 1 when one detector's verdict alone decided, 2 or more when others agreed. Counted by detector, not rule. 0 on anything but a `block`. A Shadow AI Device coaches rather than blocks a block resting on one detector (`basis` `detectors` and 1 here): the person may send it anyway, with a reason. */
+  detectors_agreeing?: number
+  /** On a `block`, what it rests on: `secret` (a credential), `organisation_rule` (a policy, rule or pattern the organisation wrote), or `detectors` (the built-in detectors, as many as `detectors_agreeing` says). Null on anything but a `block`. */
+  basis?: "secret" | "organisation_rule" | "detectors" | unknown
   /** Processing time in milliseconds */
   latency_ms: number
   /** Parts that reached us and were not read: they produced nothing to scan, or the scan budget was spent first. An `allow` with a non-empty `unscanned` is NOT 'this content is clean' — it is 'the text was clean and these parts were never read'. Reasons: url_only (we do not fetch caller-supplied URLs, that would be an SSRF primitive), file_id_unsupported, encrypted, no_text_extracted (a scanned/rasterised document), too_large, undecodable, unsupported_type, extractor_unavailable, unsupported_block, unsupported_tool_call (a tool call in none of the shapes we can read — `index` is its position among the request's tool calls), over_size_budget (a message older than the newest ones that filled the scan budget — `index` is its position in `messages`; it was not read on this call, and was the newest turn of an earlier one). */
@@ -842,6 +875,40 @@ export interface ShadowReportOut {
   examples: Record<string, unknown>
 }
 
+/** One security event, in the SIEM event contract (schema_version 1). */
+export interface SiemEventRecord {
+  schema_version: string
+  /** `threat_detected` or `scan_completed`. */
+  event: string
+  event_id: string
+  /** When the event happened, ISO 8601 with offset. */
+  timestamp: string
+  organization_id: string | unknown
+  organization_name: string | unknown
+  project_id: string | unknown
+  /** The project's name. */
+  project: string | unknown
+  /** Null for a key no Device holds. */
+  device_id: string | unknown
+  device_hostname: string | unknown
+  /** Free text naming who is believed to be behind the Device. Never validated; read `identity_verified` before treating it as a person. */
+  attribution_label_unverified: string | unknown
+  /** True when a Member signed in to bind the Device; false when only the label stands behind it; null when the event predates the record. */
+  identity_verified: boolean | unknown
+  threat_type: string | unknown
+  decision: string
+  confidence: number | unknown
+  reason: string | unknown
+  direction: string | unknown
+  surface: string | unknown
+  /** On a Shadow AI Device's event, the part of the request the finding came from: `current_turn`, `earlier_turn`, `instructions` or `tool_definition`. Null for any other caller's. */
+  segment?: string | unknown
+  /** Opens this event in its Organization. */
+  dashboard_url: string
+  text: string
+  threshold?: Record<string, unknown> | unknown
+}
+
 /** What a caller can run -- so a CLI can list before it picks. */
 export interface TestCatalog {
   total: number
@@ -912,10 +979,14 @@ export interface ThreatDetail {
   technique?: string | unknown
   /** The detector and rule that made this finding, the pair a Suppression is keyed on. On a block, the rule that decided. */
   rule?: FindingRule | unknown
+  /** The part of the request the finding came from. On a Shadow AI Device's scan: `current_turn` (the person's new message, its tool results and the tool calls they answer), `earlier_turn` (a turn already sent, redacted again because the app resends it), or `instructions` (the app's system or developer prompt, scanned for secrets only). On any caller's scan: `tool_definition`, for an entry of `context.tool_definitions`. Null otherwise. */
+  segment?: string | unknown
   /** Whether this finding decides. `active`: it does, and is what `decision`, `confidence` and `threat_type` report. `candidate`: a Candidate rule matched. It is recorded so the rule can be measured on live traffic, and it never changes the decision, the score or the threat type; a `candidate` threat can appear on an `allow`. `suppressed`: one of the project's Suppressions silenced the rule, so it is recorded and decides nothing, and another rule may decide instead. Decide on `decision`, never on whether `threats` is empty. */
   status?: FindingStatus
   /** The warn and block thresholds this finding's score was compared with, when the project set them for its detector (#970): which band it fell in, both thresholds and the score. A `warn` band finding appears on an `allow`: it was reported, not enforced. Null when the detector has no thresholds configured and decided as it always has, and on a finding that did not decide. */
   threshold?: AppliedThreshold | unknown
+  /** True when this finding flagged: it was reported and not enforced. A warn band raised it (`threshold` says so), a custom policy rule or LLM guard whose action is `flag`, an agentic judge's `flag`, or a detector in `flag` mode. A flagged finding can sit beside the `block` or `redact` that decided; it never changes `decision`. */
+  flagged?: boolean
   /** Lowercase hex SHA-256 of the UTF-8 text this finding's rule matched: the `match_sha256` a Suppression names to silence the rule for that text only. Null when the rule cannot be suppressed, or the finding has no one matched text (a redaction by type). */
   match_sha256?: string | unknown
 }
