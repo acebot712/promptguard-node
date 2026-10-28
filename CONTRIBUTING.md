@@ -48,13 +48,9 @@ This runs Jest via `node --experimental-vm-modules` (required for ESM support in
 
 ### Test Files
 
-| File | What it tests |
-|---|---|
-| `tests/client.test.ts` | HTTP client (request building, error handling, retries) |
-| `tests/guard.test.ts` | Guard API (scan, redact, validate-tool) |
-| `tests/patches.test.ts` | Auto-instrumentation monkey-patching of LLM SDKs |
-| `tests/integrations.test.ts` | Framework integrations (LangChain, Vercel AI) |
-| `tests/contract.test.ts` | Contract tests against `guard-contract.json` |
+One `tests/<area>.test.ts` per module (`client`, `guard`, `patches`,
+`integrations`, `vercel-ai-*`, `session-id*`, `verify`, ...). The `*-types.test.ts`
+files are compile-time checks that the README's examples still type-check.
 
 ### Contract Tests
 
@@ -66,25 +62,20 @@ Coverage is enforced in `jest.config.js`:
 
 | Metric | Minimum |
 |---|---|
-| Branches | 35% |
-| Functions | 45% |
-| Lines | 50% |
-| Statements | 50% |
+| Branches | 55% |
+| Functions | 55% |
+| Lines | 68% |
+| Statements | 65% |
 
 Tests will fail if coverage drops below these thresholds.
 
-### Environment Variables
+### No live-API mode
 
-Tests mock the API by default. To run against a live API:
-
-```bash
-PROMPTGUARD_API_KEY=pg_test_... PROMPTGUARD_BASE_URL=http://localhost:8080 npm test
-```
-
-| Variable | Default | Description |
-|---|---|---|
-| `PROMPTGUARD_API_KEY` | (none) | API key for live testing |
-| `PROMPTGUARD_BASE_URL` | `https://api.promptguard.co` | API base URL |
+The whole suite is mocked: no test makes a network call, and no test reads
+`PROMPTGUARD_BASE_URL`. Setting `PROMPTGUARD_API_KEY` does not make any test call
+a real API; the tests that depend on it set or clear it themselves, so a key in
+your shell cannot change their result. To try the SDK against a real backend, write a
+throwaway script that imports `dist/` after `npm run build`.
 
 ## CI/CD
 
@@ -94,7 +85,10 @@ CI runs on every push to `main` and on PRs (`.github/workflows/ci.yml`):
 |---|---|
 | **Lint & Type Check** | `npx biome check .` + `npx tsc --noEmit` |
 | **Test** | `npm test` on Node 20 and 22 |
-| **Build** | `npm run build` + `npm pack --dry-run` |
+| **Validate API Contract** | Downloads the developer OpenAPI spec and checks SDK types against it (`tests/validate-openapi.ts`) |
+| **Build** | `npm run build` + `npm pack --dry-run` + `npm run test:pack` (CJS + ESM packaging smoke test) |
+
+Secret scanning runs separately in `.github/workflows/secret-scan.yml`.
 
 Reproduce CI locally:
 
