@@ -50,7 +50,8 @@ This runs Jest via `node --experimental-vm-modules` (required for ESM support in
 
 One `tests/<area>.test.ts` per module (`client`, `guard`, `patches`,
 `integrations`, `vercel-ai-*`, `session-id*`, `verify`, ...). The `*-types.test.ts`
-files are compile-time checks that the README's examples still type-check.
+files are compile-time only: `readme-types` keeps the README's type imports
+valid, and `vercel-ai-types` compiles the integration against ai 5, 6 and 7.
 
 ### Contract Tests
 
