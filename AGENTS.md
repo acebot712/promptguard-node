@@ -1,89 +1,58 @@
 # AGENTS.md
 
-## Overview
-
-Node.js SDK for PromptGuard (`promptguard-sdk` on npm). Provides auto-instrumentation for LLM SDKs (OpenAI, Anthropic, Google, Cohere, Bedrock), a Guard API client, and framework integrations (LangChain.js, Vercel AI SDK).
-
-## Repository Layout
-
-```
-src/
-├── index.ts           # Public exports
-├── client.ts          # HTTP client (proxy mode)
-├── guard.ts           # Guard API client
-├── auto.ts            # Auto-instrumentation (init())
-├── patches/           # SDK monkey-patches
-└── integrations/      # Framework integrations
-
-tests/
-├── client.test.ts
-├── guard.test.ts
-├── patches.test.ts
-├── integrations.test.ts
-└── contract.test.ts
-
-dist/                  # Compiled output (not committed)
-```
+Node.js SDK for PromptGuard, published as `promptguard-sdk` on npm from a
+public repo. It secures LLM calls three ways: the `PromptGuard` client (proxy
+mode), `init()` auto-instrumentation that patches installed provider SDKs, and
+framework integrations (LangChain.js, Vercel AI SDK). Domain vocabulary is in
+`CONTEXT.md`; layout is the `src/` and `tests/` tree itself.
 
 ## Setup
 
 ```bash
-npm install
-pre-commit install          # tracked git hooks; once per clone
+npm install                 # npm, not pnpm: package-lock.json is the lockfile
+pre-commit install          # tracked hooks, once per clone (commit + push stages)
 ```
 
-`pre-commit install` wires both stages. The push stage runs one thing: a
-gitleaks scan of the commits you are pushing. It is scoped to that range on
-purpose — this package is published to npm and the repo is public, so a
-credential reaching `main` is world-readable at once, while scanning the whole
-tree or the history fails on its first run and teaches everyone `--no-verify`.
-CI here runs no secret scanning, so this hook is the only one there is. A
-fixture that is meant to look like a credential belongs in `.gitleaks.toml`,
-not behind a bypass.
+## Before you hand back a change
 
-## Building and Testing
+After editing TypeScript, run `npm run format` then `npm run check` (Biome is
+the only linter and formatter here). The CI gate, reproduced locally, is
+`npm run lint && npm test && npm run build`; `lint` is `tsc --noEmit` plus
+Biome. Run tests through `npm test`: it starts Jest under
+`--experimental-vm-modules`, which a bare `jest` call omits. Coverage
+thresholds in `jest.config.js` fail the suite; add tests rather than lowering
+them. Commands, coverage and CI jobs: `CONTRIBUTING.md`.
 
-```bash
-npm run build                    # Compile TypeScript (tsc)
-npm test                         # Run all tests (Jest)
-npm run lint                     # TypeScript type check (tsc --noEmit)
+## Rules
 
-# Live API tests (optional)
-PROMPTGUARD_API_KEY=pg_... PROMPTGUARD_BASE_URL=https://api.promptguard.co npm test
-```
+- **Public API**: keep it small (`init()`, the `PromptGuard` client, framework
+  integrations). A breaking change ships only with a major version bump.
+- **Dependencies**: the package has zero runtime dependencies; provider SDKs
+  are optional `peerDependencies`. Raise any new runtime dependency for
+  discussion before adding it.
+- **Output**: `dist/` is compiled CommonJS and gitignored.
+- **Guard contract** (`tests/guard-contract.json`): shared with the Python SDK
+  and pinned by `tests/guard-contract.lock.json`, so a hand edit fails the
+  suite. Change it upstream in coordination with the Python SDK and adopt it
+  via `scripts/sync-guard-contract.ts`; read `docs/adr/0001-shared-guard-contract.md`
+  before touching it. `src/generated/` is likewise produced by the weekly
+  `sync-from-api` workflow.
+- **Commits**: imperative mood ("Add X"), describing the change from the SDK
+  user's perspective, referencing issues when there is one.
 
-## Code Quality
+## Secrets
 
-```bash
-npm run check                    # Biome lint
-npm run format                   # Biome format
-npm run format:check             # Check formatting
-```
+Keep API keys, tokens and credentials out of every commit. The repo is public
+and the package is on npm, so a credential reaching `main` is world-readable
+at once and must be rotated, not reverted.
 
-Always run `npm run check` and `npm run format` after editing TypeScript files.
-
-## Coding Standards
-
-- Node.js >= 20, TypeScript strict mode
-- Biome for linting and formatting (not ESLint/Prettier)
-- Jest for testing with `ts-jest` and `--experimental-vm-modules`
-- Keep the public API surface small: `init()`, `PromptGuard` client, framework integrations
-- No runtime dependencies beyond what's in `package.json` without discussion
-- Compiled output goes to `dist/` (CommonJS)
-
-## Commit Messages
-
-- Imperative mood: "Add X" not "Added X"
-- Focus on what changed from the user's perspective
-- Reference issues when applicable
-
-## Boundaries
-
-### Never
-- Commit API keys, tokens, or credentials
-- Add heavyweight runtime dependencies
-- Break the public API without a major version bump
-- Modify the contract test spec without coordinating with the Python SDK
+Two gitleaks scans guard it, both scoped to the pushed range: the pre-push hook
+(`scripts/hooks/gitleaks-push.sh`) and the `secret-scan.yml` workflow. Scanning
+the whole tree or history would fail on the first run and teach everyone
+`--no-verify`. When a scan flags a fixture that is meant to look like a
+credential, give it an obviously fake shape or allowlist its path in
+`.gitleaks.toml` (create the file if absent) so the exemption is reviewable;
+fix the finding rather than bypassing the hook.
 
 ## Agent skills
 
