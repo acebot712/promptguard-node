@@ -503,6 +503,7 @@ import type {
 
 - [Documentation](https://docs.promptguard.co)
 - [SDK Reference](https://docs.promptguard.co/sdks/node)
+- [Changelog](https://github.com/acebot712/promptguard-node/blob/main/CHANGELOG.md)
 - [Support](mailto:support@promptguard.co)
 
 ## License
