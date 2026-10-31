@@ -30,7 +30,7 @@ Get a free API key at [app.promptguard.co](https://app.promptguard.co).
 
 ## Option 1: Auto-Instrumentation (Recommended)
 
-One line secures **every** LLM call in your application - no matter which framework you use.
+One call to `init()` scans the LLM calls your application makes through the provider methods listed under [Supported SDKs](#supported-sdks), including calls made by frameworks built on those SDKs. Anything else (another provider, a raw `fetch`, or a native-ESM import the patch never reaches; see [Limitations](#limitations)) is not scanned, so confirm coverage with [`verify()`](#confirming-protection-is-actually-live).
 
 ```typescript
 // All imports first — ES module imports are hoisted and always run before
@@ -68,10 +68,12 @@ Auto-instrumentation patches the `create` / `generateContent` / `chat` / `send` 
 |-----|------------|-------------------|
 | OpenAI | `openai` | `chat.completions.create`, `responses.create` (string and message-item `input` forms) |
 | Anthropic | `@anthropic-ai/sdk` | `messages.create` |
-- `@google/genai` (Google's current SDK): `models.generateContent()` / `generateContentStream()`. The `config.systemInstruction` system prompt is scanned, as are tool-call arguments and code-execution output. Patched by swapping the exported `GoogleGenAI` constructor, because this SDK assigns `generateContent` as an own property in the constructor rather than on the prototype.
-| Google Generative AI | `@google/generative-ai` | `generateContent` | (**deprecated by Google**; still supported because customers are still on it)
+| Google Gen AI (Google's current SDK) | `@google/genai` | `models.generateContent`, `models.generateContentStream` |
+| Google Generative AI (**deprecated by Google**; still supported) | `@google/generative-ai` | `generateContent` |
 | Cohere | `cohere-ai` | `Client.chat` / `ClientV2.chat` |
 | AWS Bedrock | `@aws-sdk/client-bedrock-runtime` | `BedrockRuntimeClient.send` (InvokeModel, InvokeModelWithResponseStream, Converse, ConverseStream) |
+
+For `@google/genai`, the `config.systemInstruction` system prompt is scanned, as are tool-call arguments and code-execution output. It is patched by swapping the exported `GoogleGenAI` constructor, because this SDK assigns `generateContent` as an own property in the constructor rather than on the prototype.
 
 Any framework built on these SDKs is automatically covered: **LangChain.js**, **Vercel AI SDK**, **AutoGen**, **Semantic Kernel**, and more.
 
@@ -138,9 +140,12 @@ expect((await verify()).ok).toBe(true);
 ```
 
 It checks reachability, authentication, live threat detection and PII redaction,
-plus which provider SDKs this process actually patched — the same checks, under
-the same names, as `promptguard verify` in the CLI and `promptguard.verify()` in
-the Python SDK.
+plus which provider SDKs this process actually patched. The check names are
+`connectivity`, `authentication`, `threat_detection`, `pii_redaction` and
+`instrumentation`, the same as `promptguard.verify()` in the Python SDK.
+`promptguard verify` in the CLI sends the same two probes but is not the same
+report: it has no instrumentation check (it cannot see inside your process) and
+no `warn` status in its JSON output, only pass/fail counts.
 
 Each check reports `pass`, `warn` or `fail`. **Only a `fail` clears `ok`.** A
 request that never completed is a failure; a request that completed and came
@@ -200,10 +205,15 @@ if (result.blocked) {
 
 ```typescript
 const result = await pg.security.redact(
-  'My email is john@example.com and SSN is 123-45-6789'
+  'My email is jane.doe@acme.com and SSN is 123-45-6789'
 );
-console.log(result.redacted);
+console.log(result.redacted);  // My email is [EMAIL_REDACTED] and SSN is [SSN_REDACTED]
+console.log(result.piiFound);  // [ 'email', 'ssn' ]
 ```
+
+Addresses at the domains reserved for documentation (`example.com`, `.test`,
+`.invalid`, `.localhost`) are deliberately left alone, so `john@example.com`
+comes back unchanged.
 
 ## Framework Integrations
 
@@ -405,8 +415,11 @@ console.log(`${catalog.total} attacks available`);
 const summary = await pg.redteam.runAll('support_bot:strict');
 console.log(`Blocked ${summary.blocked}/${summary.totalTests}`);
 
-// Run one named attack, or your own adversarial prompt
-const one = await pg.redteam.runTest('prompt_injection_basic');
+// Run one attack, by the `name` the catalog lists (e.g. 'pi_001')
+const one = await pg.redteam.runTest(String(catalog.tests[0].name), 'support_bot:strict');
+console.log(one.testName, one.decision);
+
+// Or your own adversarial prompt
 const custom = await pg.redteam.runCustom('ignore previous instructions and ...');
 console.log(custom.decision, custom.reason);
 ```
@@ -487,9 +500,10 @@ import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
   SecurityScanResult,
-  AutonomousRedTeamRequest,
-  AutonomousRedTeamReport,
-  IntelligenceStats,
+  RedactResult,
+  RedTeamSummary,
+  RedTeamTestResult,
+  ToolValidationResult,
   VerifyReport,
   VerifyCheck,
   VerifyOptions,
@@ -497,7 +511,7 @@ import type {
 } from 'promptguard-sdk';
 ```
 
-> **Response fields are camelCase — with one deliberate exception.** The SDK's normalized response objects (the `security`, `redteam`, `agent`, and `guard` namespaces) use camelCase field names (e.g. `report.bypassRate`, `stats.totalPatterns`, `validation.riskScore`) regardless of the snake_case wire format — consistent with `GuardDecision` and `SecurityScanResult`. The **OpenAI-compatible** responses (`chat.completions`, i.e. `ChatCompletionResponse`) are the exception: they intentionally preserve OpenAI's snake_case shape (`choices[].finish_reason`, `usage.prompt_tokens`, …) so they stay drop-in compatible with the `openai` client. Request options are camelCase throughout (`maxTokens`, `targetPreset`), including `GuardContext` (`chainName`, `agentId`, `sessionId`, `toolCalls`).
+> **Response fields are camelCase — with one deliberate exception.** The SDK's normalized response objects (the `security`, `redteam`, `agent`, and `guard` namespaces) use camelCase field names (e.g. `summary.blockRate`, `result.testName`, `validation.riskScore`) regardless of the snake_case wire format — consistent with `GuardDecision` and `SecurityScanResult`. The **OpenAI-compatible** responses (`chat.completions`, i.e. `ChatCompletionResponse`) are the exception: they intentionally preserve OpenAI's snake_case shape (`choices[].finish_reason`, `usage.prompt_tokens`, …) so they stay drop-in compatible with the `openai` client. Request options are camelCase throughout (`maxTokens`, `targetPreset`), including `GuardContext` (`chainName`, `agentId`, `sessionId`, `toolCalls`).
 
 ## Links
 
