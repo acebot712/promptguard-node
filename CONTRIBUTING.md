@@ -111,7 +111,7 @@ The release workflow (`.github/workflows/release.yml`):
 2. Checks if the version already exists on npm
 3. Publishes to npm with `--provenance` (trusted publishing)
 
-Requires `NPM_TOKEN` secret in GitHub repo settings.
+No token: npm trusted publishing trusts this repository's `release.yml` and mints a one-run credential from its OIDC token. GitHub holds no secrets; the one the release reads, the `#releases` webhook, comes from Google Secret Manager.
 
 ## PR Checklist
 
