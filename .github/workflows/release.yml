@@ -100,15 +100,13 @@ jobs:
 
       - name: Publish (Trusted Publishing)
         if: steps.check.outputs.exists == 'false'
+        # No NODE_AUTH_TOKEN: npm trusted publishing exchanges the OIDC
+        # id-token above for a one-run credential (npm >= 11.5.1, which Node
+        # 24 ships). Confirmed before the token was removed: 2.4.1 was
+        # published by "GitHub Actions" through the trusted publisher, with the
+        # token still set and unused. A long-lived token was a standing
+        # credential-theft risk.
         run: npm publish --access public --provenance
-        env:
-          # TODO(security): remove NODE_AUTH_TOKEN (and the NPM_TOKEN repo
-          # secret) once npm Trusted Publishing is confirmed configured for
-          # this package on npmjs.com — with Trusted Publishing the OIDC
-          # id-token above is sufficient, and a long-lived token is a
-          # standing credential-theft risk. Kept for now so releases don't
-          # break before that account-side change is verified.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # Tells Slack #releases this version is on npm (ADR-0038 in the platform
   # repo). Only after a real publish, never for a re-run that found the
@@ -122,13 +120,28 @@ jobs:
     needs: publish
     if: needs.publish.outputs.published == 'true'
     continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write # Workload Identity, to read the webhook
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           sparse-checkout: scripts
+      # Secret Manager is the only store; GitHub holds no secrets. This repo
+      # reads as itself (direct Workload Identity Federation, no service account).
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.WORKLOAD_IDENTITY_PROVIDER }}
+      - name: Read secrets from Secret Manager
+        id: secrets
+        uses: google-github-actions/get-secretmanager-secrets@bc9c54b29fdffb8a47776820a7d26e77b379d262 # v3.0.0
+        with:
+          secrets: |-
+            SLACK_RELEASES_WEBHOOK_URL:promptguard-production-472014/SLACK_RELEASES_WEBHOOK_URL
       - name: Post to #releases
         env:
-          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
+          SLACK_RELEASES_WEBHOOK_URL: ${{ steps.secrets.outputs.SLACK_RELEASES_WEBHOOK_URL }}
           VERSION: ${{ needs.publish.outputs.version }}
         run: |
           scripts/post-release.sh "Node SDK" "v${VERSION}" \
