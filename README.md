@@ -513,6 +513,21 @@ import type {
 
 > **Response fields are camelCase — with one deliberate exception.** The SDK's normalized response objects (the `security`, `redteam`, `agent`, and `guard` namespaces) use camelCase field names (e.g. `summary.blockRate`, `result.testName`, `validation.riskScore`) regardless of the snake_case wire format — consistent with `GuardDecision` and `SecurityScanResult`. The **OpenAI-compatible** responses (`chat.completions`, i.e. `ChatCompletionResponse`) are the exception: they intentionally preserve OpenAI's snake_case shape (`choices[].finish_reason`, `usage.prompt_tokens`, …) so they stay drop-in compatible with the `openai` client. Request options are camelCase throughout (`maxTokens`, `targetPreset`), including `GuardContext` (`chainName`, `agentId`, `sessionId`, `toolCalls`).
 
+## Versioning and support
+
+- **Versions** follow [semantic versioning](https://semver.org): anything in
+  the public interface, exported types included, is removed or renamed only in
+  a new major version, and every change is in [`CHANGELOG.md`](./CHANGELOG.md).
+- **Runtimes:** Node.js 20 or later (`engines` in
+  [`package.json`](./package.json)).
+- **API version:** the SDK calls PromptGuard's `/api/v1` API
+  (`https://api.promptguard.co/api/v1` unless you set `baseUrl`).
+- **Previous major version:** when a new major version ships, the previous one
+  gets security fixes for 12 months. 1.x gets them until 2027-08-26, 12 months
+  after 2.0.0. Moving from 1.x: [Upgrade to SDK and CLI 2.0](https://docs.promptguard.co/releases/sdk-v2-upgrade).
+
+The full policy: [Versioning & support](https://docs.promptguard.co/versioning-and-support).
+
 ## Links
 
 - [Documentation](https://docs.promptguard.co)
