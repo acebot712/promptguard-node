@@ -9,8 +9,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 a dated version section when a release goes out — an `Unreleased` block that
 survives three releases is a changelog nobody is maintaining.
 
-
 ## [Unreleased]
+
+### Added
+
+- **Every release is announced in Slack `#releases`, and npm shows the
+  changelog.** After a real publish, the release workflow's new `announce` job
+  posts the version, its GitHub Release and its npm page through
+  `scripts/post-release.sh`, a copy of the platform repo's script. It reads
+  the `SLACK_RELEASES_WEBHOOK_URL` secret, and an unset secret or a Slack
+  failure is a warning, never a failed release. npm has no changelog field,
+  so the package now ships `CHANGELOG.md` and the README's Links section
+  (npm's package page) links it.
 
 ## [2.4.1] — 2026-10-23
 
@@ -188,7 +198,6 @@ same type sync in a module that can be imported.
 - **Generated types and the cross-SDK contract re-synced from the platform API**
   (#50). Types only.
 
-
 ## [2.2.0] — 2026-09-06
 
 **No user-facing change.** This release keeps the Node SDK's version in step
@@ -250,7 +259,6 @@ Additive only — nothing in 2.0.0 changed behaviour or signature.
   If you are affected, the fix is to delete the import — there is no
   replacement, because there was never a working implementation behind it. For
   chat traffic, use `pg.chat.completions.create(...)`, which is unchanged.
-
 
 ## [1.13.0] — 2026-08-19
 
