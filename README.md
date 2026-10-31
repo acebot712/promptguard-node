@@ -1,6 +1,6 @@
 [![npm version](https://img.shields.io/npm/v/promptguard-sdk)](https://www.npmjs.com/package/promptguard-sdk)
-[![CI](https://github.com/acebot712/promptguard-node/actions/workflows/ci.yml/badge.svg)](https://github.com/acebot712/promptguard-node/actions/workflows/ci.yml)
-[![License](https://img.shields.io/github/license/acebot712/promptguard-node)](https://github.com/acebot712/promptguard-node/blob/main/LICENSE)
+[![CI](https://github.com/promptguardhq/promptguard-node/actions/workflows/ci.yml/badge.svg)](https://github.com/promptguardhq/promptguard-node/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/promptguardhq/promptguard-node)](https://github.com/promptguardhq/promptguard-node/blob/main/LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue)](https://www.typescriptlang.org/)
 
 # PromptGuard Node.js SDK
@@ -532,7 +532,7 @@ The full policy: [Versioning & support](https://docs.promptguard.co/versioning-a
 
 - [Documentation](https://docs.promptguard.co)
 - [SDK Reference](https://docs.promptguard.co/sdks/node)
-- [Changelog](https://github.com/acebot712/promptguard-node/blob/main/CHANGELOG.md)
+- [Changelog](https://github.com/promptguardhq/promptguard-node/blob/main/CHANGELOG.md)
 - [Support](mailto:support@promptguard.co)
 
 ## License

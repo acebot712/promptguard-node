@@ -24,13 +24,13 @@ jobs:
   # This job used to duplicate promptguard-python's sync-from-api.yml
   # near-verbatim (same fetch/generate/validate/diff/PR-create shape,
   # differing only in npm vs pip mechanics). It's now hosted once at
-  # acebot712/promptguard-python/.github/workflows/_sync-from-api.yml and
+  # promptguardhq/promptguard-python/.github/workflows/_sync-from-api.yml and
   # called from both repos -- see that file for what actually runs.
   sync-types:
     permissions:
       contents: write
       pull-requests: write
-    uses: acebot712/promptguard-python/.github/workflows/_sync-from-api.yml@main
+    uses: promptguardhq/promptguard-python/.github/workflows/_sync-from-api.yml@main
     with:
       runtime: node
       install-command: npm ci

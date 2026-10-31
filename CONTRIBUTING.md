@@ -10,7 +10,7 @@
 ## Quick Start
 
 ```bash
-git clone https://github.com/acebot712/promptguard-node.git
+git clone https://github.com/promptguardhq/promptguard-node.git
 cd promptguard-node
 npm install
 npm test                # Run tests
@@ -124,7 +124,7 @@ No token: npm trusted publishing trusts this repository's `release.yml` and mint
 
 ## Reporting Issues
 
-Open an issue at https://github.com/acebot712/promptguard-node/issues with:
+Open an issue at https://github.com/promptguardhq/promptguard-node/issues with:
 
 - Node.js version (`node --version`)
 - SDK version (`npm ls promptguard-sdk`)

@@ -81,11 +81,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/acebot712/promptguard-node.git"
+    "url": "https://github.com/promptguardhq/promptguard-node.git"
   },
   "homepage": "https://promptguard.co",
   "bugs": {
-    "url": "https://github.com/acebot712/promptguard-node/issues"
+    "url": "https://github.com/promptguardhq/promptguard-node/issues"
   },
   "engines": {
     "node": ">=20.0.0"
